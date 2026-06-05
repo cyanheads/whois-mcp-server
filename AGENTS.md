@@ -11,19 +11,6 @@
 
 ---
 
-## First Session
-
-This project was just scaffolded with `bunx @cyanheads/mcp-ts-core init`. You're holding a production-grade MCP framework with the hard parts already solved — error handling, telemetry, auth, transport, validation, lifecycle. What's missing is the **domain**. Your job: design the tool, resource, and service surface with the user, then implement it as small pure handlers that throw — the framework catches, classifies, and instruments the rest. Design before code; the user's first messages set direction, so wait for them before scaffolding definitions.
-
-> **Remove this section** from CLAUDE.md / AGENTS.md after completing these steps. The skills and conventions below remain — this block is one-time onboarding only.
-
-1. **Get your bearings.** Take stock of the project tree, the skills in `skills/`, and the tools/MCP servers available. Light tool use is fine for context-building — you're mapping the territory, not committing yet.
-2. **Read the framework docs** — `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (builders, Context, errors, exports, conventions)
-3. **Run the `setup` skill** — read `skills/setup/SKILL.md` and follow its checklist (project orientation, agent protocol file selection, echo definition cleanup, skill sync)
-4. **Design the server** — read `skills/design-mcp-server/SKILL.md` and work through it with the user to map the domain into tools, resources, and services before scaffolding
-
----
-
 ## What's Next?
 
 When the user asks what's next or needs direction, suggest options based on the current project state. Common next steps:
@@ -60,71 +47,35 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 
 ```ts
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { getRdapService } from '@/services/rdap/rdap-service.js';
 
-export const searchItems = tool('search_items', {
-  description: 'Search inventory items by query.',
-  annotations: { readOnlyHint: true },
+export const whoisLookupDomain = tool('whois_lookup_domain', {
+  description: 'Look up a domain\'s registration record — registrar, created/expiry dates, nameservers, EPP status codes, DNSSEC flag, and registrant org (where not privacy-redacted). RDAP-first via IANA auto-bootstrap.',
+  annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
-    query: z.string().describe('Search terms'),
-    limit: z.number().default(10).describe('Max results'),
+    domain: z.string().describe('Domain name to look up (e.g. "github.com")'),
   }),
   output: z.object({
-    items: z.array(z.object({
-      id: z.string().describe('Item ID'),
-      name: z.string().describe('Item name'),
-    })).describe('Matching items'),
+    domain: z.string().describe('Normalized domain name'),
+    registrar: z.string().nullable().describe('Registrar name'),
+    // … additional output fields
   }),
-  auth: ['inventory:read'],
-
-  async handler(input, ctx) {
-    const items = await findItems(input.query, input.limit);
-    ctx.log.info('Search completed', { query: input.query, count: items.length });
-    return { items };
-  },
-
-  // format() populates content[] — the markdown twin of structuredContent.
-  // Different clients read different surfaces (Claude Code → structuredContent,
-  // Claude Desktop → content[]); both must carry the same data.
-  // Enforced at lint time: every field in `output` must appear in the rendered text.
-  format: (result) => [{
-    type: 'text',
-    text: result.items.map(i => `**${i.id}**: ${i.name}`).join('\n'),
-  }],
-});
-```
-
-### Resource
-
-```ts
-import { resource, z } from '@cyanheads/mcp-ts-core';
-import { notFound } from '@cyanheads/mcp-ts-core/errors';
-
-export const itemData = resource('inventory://{itemId}', {
-  description: 'Fetch an inventory item by ID.',
-  params: z.object({ itemId: z.string().describe('Item identifier') }),
-  auth: ['inventory:read'],
-  async handler(params, ctx) {
-    const item = await ctx.state.get(`item:${params.itemId}`);
-    if (!item) throw notFound(`Item ${params.itemId} not found`, { itemId: params.itemId });
-    return item;
-  },
-});
-```
-
-### Prompt
-
-```ts
-import { prompt, z } from '@cyanheads/mcp-ts-core';
-
-export const reviewCode = prompt('review_code', {
-  description: 'Review code for issues and best practices.',
-  args: z.object({
-    code: z.string().describe('Code to review'),
-    language: z.string().optional().describe('Programming language'),
-  }),
-  generate: (args) => [
-    { role: 'user', content: { type: 'text', text: `Review this ${args.language ?? ''} code:\n${args.code}` } },
+  errors: [
+    { reason: 'rdap_no_coverage', code: JsonRpcErrorCode.NotFound,
+      when: 'TLD has no RDAP server in IANA bootstrap',
+      recovery: 'Use whois_check_availability instead or try a different TLD.' },
+    { reason: 'domain_not_found', code: JsonRpcErrorCode.NotFound,
+      when: 'RDAP returned 404 — domain not registered',
+      recovery: 'Use whois_check_availability to confirm the domain is available.' },
   ],
+  async handler(input, ctx) {
+    const rdap = getRdapService();
+    const record = await rdap.lookupDomain(input.domain);
+    ctx.log.info('Domain lookup completed', { domain: input.domain });
+    return record;
+  },
+  format: (result) => [{ type: 'text', text: `**${result.domain}** — Registrar: ${result.registrar ?? 'unknown'}` }],
 });
 ```
 
@@ -136,21 +87,25 @@ import { z } from '@cyanheads/mcp-ts-core';
 import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
-  apiKey: z.string().describe('External API key'),
-  maxResults: z.coerce.number().default(100),
+  rdapTimeoutMs: z.coerce.number().default(5000).describe('HTTP timeout for RDAP requests in ms.'),
+  dohTimeoutMs: z.coerce.number().default(3000).describe('HTTP timeout for DoH requests in ms.'),
+  rdapMaxRetries: z.coerce.number().default(2).describe('Max retry attempts on transient RDAP failures.'),
+  dohMaxRetries: z.coerce.number().default(2).describe('Max retry attempts on transient DoH failures.'),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
 export function getServerConfig() {
   _config ??= parseEnvConfig(ServerConfigSchema, {
-    apiKey: 'MY_API_KEY',
-    maxResults: 'MY_MAX_RESULTS',
+    rdapTimeoutMs: 'RDAP_TIMEOUT_MS',
+    dohTimeoutMs: 'DOH_TIMEOUT_MS',
+    rdapMaxRetries: 'RDAP_MAX_RETRIES',
+    dohMaxRetries: 'DOH_MAX_RETRIES',
   });
   return _config;
 }
 ```
 
-`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`MY_API_KEY`) not the path (`apiKey`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
+`parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`RDAP_TIMEOUT_MS`) not the path (`rdapTimeoutMs`). Throws `ConfigurationError`, which the framework prints as a clean startup banner.
 
 ### Server instructions
 
@@ -165,11 +120,8 @@ Handlers receive a unified `ctx` object. Key properties:
 | Property | Description |
 |:---------|:------------|
 | `ctx.log` | Request-scoped logger — `.debug()`, `.info()`, `.notice()`, `.warning()`, `.error()`. Auto-correlates requestId, traceId, tenantId. |
-| `ctx.state` | Tenant-scoped KV — `.get(key)`, `.set(key, value, { ttl? })`, `.delete(key)`, `.list(prefix, { cursor, limit })`. Accepts any serializable value. |
-| `ctx.elicit` | Ask user for structured input. **Check for presence first:** `if (ctx.elicit) { ... }` |
-| `ctx.sample` | Request LLM completion from the client. **Check for presence first:** `if (ctx.sample) { ... }` |
+| `ctx.state` | Tenant-scoped KV — `.get(key)`, `.set(key, value, { ttl? })`, `.delete(key)`, `.list(prefix, { cursor, limit })`. Used for IANA bootstrap cache. |
 | `ctx.signal` | `AbortSignal` for cancellation. |
-| `ctx.progress` | Task progress (present when `task: true`) — `.setTotal(n)`, `.increment()`, `.update(message)`. |
 | `ctx.requestId` | Unique request ID. |
 | `ctx.tenantId` | Tenant ID from JWT or `'default'` for stdio. |
 
@@ -227,16 +179,21 @@ src/
   config/
     server-config.ts                    # Server-specific env vars (Zod schema)
   services/
-    [domain]/
-      [domain]-service.ts               # Domain service (init/accessor pattern)
-      types.ts                          # Domain types
+    rdap/
+      rdap-service.ts                   # RDAP client — IANA bootstrap + domain/IP/ASN lookup
+      types.ts                          # RDAP domain/IP/ASN normalized types
+    doh/
+      doh-service.ts                    # DNS-over-HTTPS client — Cloudflare primary, Google fallback
+      types.ts                          # DoH record types
   mcp-server/
     tools/definitions/
-      [tool-name].tool.ts               # Tool definitions
-    resources/definitions/
-      [resource-name].resource.ts       # Resource definitions
-    prompts/definitions/
-      [prompt-name].prompt.ts           # Prompt definitions
+      whois-lookup-domain.tool.ts       # Domain registration record via RDAP
+      whois-check-availability.tool.ts  # Domain availability check (RDAP 404 = available)
+      whois-get-dns.tool.ts             # DNS records via DoH (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR)
+      whois-lookup-ip.tool.ts           # IP/CIDR netblock, org, abuse contact via RIR RDAP
+      whois-lookup-asn.tool.ts          # ASN to org/RIR resolution via RIR RDAP
+      whois-get-dossier.tool.ts         # One-call domain triage — registration + DNS in parallel
+      _fqdn.ts                          # Shared FQDN validation helper
 ```
 
 ---

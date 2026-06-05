@@ -1,9 +1,9 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "whois-mcp-server",
-  "description": "",
+  "name": "io.github.cyanheads/whois-mcp-server",
+  "description": "Domain registration, availability, DNS records, and IP/ASN resolution via RDAP and DNS-over-HTTPS.",
   "repository": {
-    "url": "",
+    "url": "https://github.com/cyanheads/whois-mcp-server",
     "source": "github"
   },
   "version": "0.1.0",
@@ -11,8 +11,8 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "whois-mcp-server",
-      "runtimeHint": "node",
+      "identifier": "@cyanheads/whois-mcp-server",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -31,6 +31,34 @@
           "format": "string",
           "isRequired": false,
           "default": "info"
+        },
+        {
+          "name": "RDAP_TIMEOUT_MS",
+          "description": "HTTP timeout for RDAP requests in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "5000"
+        },
+        {
+          "name": "DOH_TIMEOUT_MS",
+          "description": "HTTP timeout for DNS-over-HTTPS requests in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "3000"
+        },
+        {
+          "name": "RDAP_MAX_RETRIES",
+          "description": "Max retry attempts on transient RDAP failures.",
+          "format": "string",
+          "isRequired": false,
+          "default": "2"
+        },
+        {
+          "name": "DOH_MAX_RETRIES",
+          "description": "Max retry attempts on transient DNS-over-HTTPS failures.",
+          "format": "string",
+          "isRequired": false,
+          "default": "2"
         }
       ],
       "transport": {
@@ -40,8 +68,8 @@
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
-      "identifier": "whois-mcp-server",
-      "runtimeHint": "node",
+      "identifier": "@cyanheads/whois-mcp-server",
+      "runtimeHint": "bun",
       "version": "0.1.0",
       "packageArguments": [
         {
@@ -76,6 +104,12 @@
           "default": "/mcp"
         },
         {
+          "name": "MCP_PUBLIC_URL",
+          "description": "Public origin override for deployments behind a TLS-terminating reverse proxy (e.g. https://mcp.example.com).",
+          "format": "string",
+          "isRequired": false
+        },
+        {
           "name": "MCP_AUTH_MODE",
           "description": "Authentication mode to use: 'none', 'jwt', or 'oauth'.",
           "format": "string",
@@ -88,6 +122,34 @@
           "format": "string",
           "isRequired": false,
           "default": "info"
+        },
+        {
+          "name": "RDAP_TIMEOUT_MS",
+          "description": "HTTP timeout for RDAP requests in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "5000"
+        },
+        {
+          "name": "DOH_TIMEOUT_MS",
+          "description": "HTTP timeout for DNS-over-HTTPS requests in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "3000"
+        },
+        {
+          "name": "RDAP_MAX_RETRIES",
+          "description": "Max retry attempts on transient RDAP failures.",
+          "format": "string",
+          "isRequired": false,
+          "default": "2"
+        },
+        {
+          "name": "DOH_MAX_RETRIES",
+          "description": "Max retry attempts on transient DNS-over-HTTPS failures.",
+          "format": "string",
+          "isRequired": false,
+          "default": "2"
         }
       ],
       "transport": {

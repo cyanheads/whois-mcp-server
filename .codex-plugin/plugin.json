@@ -1,25 +1,41 @@
 {
-  "name": "whois-mcp-server",
+  "name": "@cyanheads/whois-mcp-server",
   "version": "0.1.0",
-  "description": "",
+  "description": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "",
-    "email": "",
-    "url": ""
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
-  "homepage": "",
-  "repository": "",
+  "homepage": "https://github.com/cyanheads/whois-mcp-server#readme",
+  "repository": "git+https://github.com/cyanheads/whois-mcp-server.git",
   "license": "Apache-2.0",
-  "keywords": ["mcp", "mcp-server", "model-context-protocol"],
+  "keywords": [
+    "whois",
+    "rdap",
+    "dns",
+    "domain",
+    "ip",
+    "asn",
+    "dns-over-https",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "ai-agent"
+  ],
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
-    "displayName": "whois-mcp-server",
-    "shortDescription": "",
+    "displayName": "@cyanheads/whois-mcp-server",
+    "shortDescription": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
     "longDescription": "",
-    "developerName": "",
-    "category": "",
+    "developerName": "cyanheads",
+    "category": "developer-tools",
     "capabilities": ["Read"],
-    "websiteURL": "",
+    "websiteURL": "https://github.com/cyanheads/whois-mcp-server#readme",
     "defaultPrompt": []
   }
 }
