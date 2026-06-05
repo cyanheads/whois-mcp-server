@@ -337,8 +337,11 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     if (result.a_records.length > 0) lines.push(`**A:** ${result.a_records.join(', ')}`);
     if (result.ns_records.length > 0) lines.push(`**NS:** ${result.ns_records.join(', ')}`);
     if (result.mx_records.length > 0) lines.push(`**MX:** ${result.mx_records.join(', ')}`);
-    if (result.txt_records.length > 0)
-      lines.push(`**TXT:** ${result.txt_records.slice(0, 3).join(' | ')}`);
+    if (result.txt_records.length > 0) {
+      // TXT records are attacker-controlled free-text; backtick-fence each value to prevent prompt injection
+      const fenced = result.txt_records.slice(0, 3).map((v) => `\`${v}\``);
+      lines.push(`**TXT:** ${fenced.join(' | ')}`);
+    }
 
     // Inferred signals
     lines.push('\n## Signals');

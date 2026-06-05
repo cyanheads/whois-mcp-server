@@ -111,7 +111,9 @@ export const whoisGetDns = tool('whois_get_dns', {
     for (const [type, recs] of byType) {
       lines.push(`\n## ${type}`);
       for (const rec of recs) {
-        lines.push(`- **${rec.data}** | name: ${rec.name} | TTL: ${rec.ttl}s`);
+        // TXT records are attacker-controlled free-text and must be fenced to prevent prompt injection
+        const data = type === 'TXT' ? `\`${rec.data}\`` : rec.data;
+        lines.push(`- **${data}** | name: ${rec.name} | TTL: ${rec.ttl}s`);
       }
     }
 
