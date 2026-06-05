@@ -6,16 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
-
-function isValidFqdn(domain: string): boolean {
-  if (!domain || domain.length > 253) return false;
-  const labels = domain.split('.');
-  if (labels.length < 2) return false;
-  return labels.every((label) => {
-    if (!label || label.length > 63) return false;
-    return /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$/.test(label);
-  });
-}
+import { isValidFqdn } from './_fqdn.js';
 
 export const whoisCheckAvailability = tool('whois_check_availability', {
   title: 'Domain Availability Check',

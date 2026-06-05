@@ -159,6 +159,16 @@ function extractTwoLabelSuffix(domain: string): string {
   return labels.slice(-2).join('.');
 }
 
+/** Identify RIR from an RDAP self-link URL */
+function ririFromSelfLink(selfLink: string): string | undefined {
+  if (selfLink.includes('arin.net')) return 'ARIN';
+  if (selfLink.includes('ripe.net')) return 'RIPE';
+  if (selfLink.includes('apnic.net')) return 'APNIC';
+  if (selfLink.includes('lacnic.net')) return 'LACNIC';
+  if (selfLink.includes('afrinic.net')) return 'AFRINIC';
+  return;
+}
+
 /** Extract vCard field value by field name */
 function vcardField(vcard: VCard, fieldName: string): string | undefined {
   for (const entry of vcard) {
@@ -268,12 +278,7 @@ function normalizeIpNetwork(raw: RdapIpNetworkRaw, ip: string): NormalizedIpNetw
   }
 
   const selfLink = raw.links?.find((l) => l.rel === 'self')?.href ?? '';
-  let rdapSource: string | undefined;
-  if (selfLink.includes('arin.net')) rdapSource = 'ARIN';
-  else if (selfLink.includes('ripe.net')) rdapSource = 'RIPE';
-  else if (selfLink.includes('apnic.net')) rdapSource = 'APNIC';
-  else if (selfLink.includes('lacnic.net')) rdapSource = 'LACNIC';
-  else if (selfLink.includes('afrinic.net')) rdapSource = 'AFRINIC';
+  const rdapSource = ririFromSelfLink(selfLink);
 
   const result: NormalizedIpNetwork = { ip, ptr: null };
 
@@ -299,12 +304,7 @@ function normalizeAutnum(raw: RdapAutnumRaw, asn: string): NormalizedAsn {
   const orgName = registrant ? entityName(registrant) : undefined;
 
   const selfLink = raw.links?.find((l) => l.rel === 'self')?.href ?? '';
-  let rir: string | undefined;
-  if (selfLink.includes('arin.net')) rir = 'ARIN';
-  else if (selfLink.includes('ripe.net')) rir = 'RIPE';
-  else if (selfLink.includes('apnic.net')) rir = 'APNIC';
-  else if (selfLink.includes('lacnic.net')) rir = 'LACNIC';
-  else if (selfLink.includes('afrinic.net')) rir = 'AFRINIC';
+  const rir = ririFromSelfLink(selfLink);
 
   const result: NormalizedAsn = { asn };
 
@@ -325,6 +325,10 @@ function normalizeAutnum(raw: RdapAutnumRaw, asn: string): NormalizedAsn {
 export class RdapService {
   private bootstrapCache: Map<string, { data: IanaBootstrap; fetchedAt: number }> = new Map();
 
+  private reqCtx(ctx: Context) {
+    return { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
+  }
+
   /** Fetch and cache a bootstrap JSON from IANA */
   private async fetchBootstrap(url: string, ctx: Context): Promise<IanaBootstrap> {
     const cached = this.bootstrapCache.get(url);
@@ -333,7 +337,7 @@ export class RdapService {
     }
 
     const config = getServerConfig();
-    const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
+    const reqCtx = this.reqCtx(ctx);
     const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
       headers: { Accept: 'application/json' },
       signal: ctx.signal,
@@ -448,7 +452,7 @@ export class RdapService {
 
     const config = getServerConfig();
     const url = `${rdapServer}/domain/${encodeURIComponent(domain.toLowerCase())}`;
-    const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
+    const reqCtx = this.reqCtx(ctx);
 
     try {
       const raw = await withRetry(
@@ -516,7 +520,7 @@ export class RdapService {
 
     const config = getServerConfig();
     const url = `${rdapServer}/domain/${encodeURIComponent(domain.toLowerCase())}`;
-    const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
+    const reqCtx = this.reqCtx(ctx);
 
     try {
       const raw = await withRetry(
@@ -592,7 +596,7 @@ export class RdapService {
     // IPv6 addresses contain colons which must NOT be percent-encoded in the RDAP path.
     // encodeURIComponent would produce 2001%3A4860%3A... which RDAP servers reject.
     const url = `${rdapServer}/ip/${base}`;
-    const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
+    const reqCtx = this.reqCtx(ctx);
 
     const raw = await withRetry(
       async () => {
@@ -638,7 +642,7 @@ export class RdapService {
 
     const config = getServerConfig();
     const url = `${rdapServer}/autnum/${asnNum}`;
-    const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
+    const reqCtx = this.reqCtx(ctx);
 
     const raw = await withRetry(
       async () => {

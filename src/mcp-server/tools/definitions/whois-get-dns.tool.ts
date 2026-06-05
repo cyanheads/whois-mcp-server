@@ -7,16 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getDohService } from '@/services/doh/doh-service.js';
 import type { DnsRecordType } from '@/services/doh/types.js';
-
-function isValidFqdn(domain: string): boolean {
-  if (!domain || domain.length > 253) return false;
-  const labels = domain.split('.');
-  if (labels.length < 2) return false;
-  return labels.every((label) => {
-    if (!label || label.length > 63) return false;
-    return /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$/.test(label);
-  });
-}
+import { isValidFqdn } from './_fqdn.js';
 
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME', 'SOA', 'CAA', 'PTR'] as const;
 

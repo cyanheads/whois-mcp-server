@@ -9,6 +9,7 @@ import { getDohService } from '@/services/doh/doh-service.js';
 import type { NormalizedDnsRecord } from '@/services/doh/types.js';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
+import { isValidFqdn } from './_fqdn.js';
 
 /** True when the error is a typed domain_not_found from rdap-service */
 function isDomainNotFound(err: unknown): boolean {
@@ -17,16 +18,6 @@ function isDomainNotFound(err: unknown): boolean {
     typeof (err.data as Record<string, unknown>)?.reason === 'string' &&
     (err.data as Record<string, unknown>).reason === 'domain_not_found'
   );
-}
-
-function isValidFqdn(domain: string): boolean {
-  if (!domain || domain.length > 253) return false;
-  const labels = domain.split('.');
-  if (labels.length < 2) return false;
-  return labels.every((label) => {
-    if (!label || label.length > 63) return false;
-    return /^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$|^[a-zA-Z0-9]$/.test(label);
-  });
 }
 
 /** Infer NS provider from the first NS record data (e.g., ns1.cloudflare.com → cloudflare) */
