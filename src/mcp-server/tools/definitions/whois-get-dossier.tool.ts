@@ -4,11 +4,20 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getDohService } from '@/services/doh/doh-service.js';
 import type { NormalizedDnsRecord } from '@/services/doh/types.js';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
+
+/** True when the error is a typed domain_not_found from rdap-service */
+function isDomainNotFound(err: unknown): boolean {
+  return (
+    err instanceof McpError &&
+    typeof (err.data as Record<string, unknown>)?.reason === 'string' &&
+    (err.data as Record<string, unknown>).reason === 'domain_not_found'
+  );
+}
 
 function isValidFqdn(domain: string): boolean {
   if (!domain || domain.length > 253) return false;
@@ -215,8 +224,10 @@ export const whoisGetDossier = tool('whois_get_dossier', {
 
     const rdapOk = rdapSettled.status === 'fulfilled';
     const dnsOk = dnsSettled.status === 'fulfilled';
+    // domain_not_found is a valid data signal (RDAP 404 = not registered), not a leg failure
+    const rdapNotFound = rdapSettled.status === 'rejected' && isDomainNotFound(rdapSettled.reason);
 
-    if (!rdapOk && !dnsOk) {
+    if (!rdapOk && !rdapNotFound && !dnsOk) {
       throw ctx.fail('both_legs_failed', 'Both RDAP and DNS lookups failed — no data available.', {
         rdap_error: rdapSettled.status === 'rejected' ? String(rdapSettled.reason) : undefined,
         dns_error: dnsSettled.status === 'rejected' ? String(dnsSettled.reason) : undefined,
@@ -230,7 +241,7 @@ export const whoisGetDossier = tool('whois_get_dossier', {
 
     if (rdapOk) {
       reg = rdapSettled.value;
-    } else {
+    } else if (!rdapNotFound) {
       rdapSourceError =
         rdapSettled.reason instanceof Error
           ? rdapSettled.reason.message
@@ -258,15 +269,22 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     const nsProvider = dnsOk ? (inferNsProvider(nsRecords) ?? null) : null;
     const mxProvider = dnsOk ? (inferMxProvider(mxRecords) ?? null) : null;
 
-    // registered: true when RDAP returned a record (rdap_coverage true + no not-found error)
-    // For RDAP availability info: the lookupDomain call will throw domain_not_found if 404,
-    // which means rdapOk would be false — in that case registered is null.
-    // When rdap_coverage: false, domain may still be registered but we can't tell → null.
-    const registered: boolean | null = rdapOk && reg ? (reg.rdap_coverage ? true : null) : null;
+    // registered:
+    //   true  — RDAP returned a record (domain exists)
+    //   false — RDAP returned 404 (domain_not_found = not registered)
+    //   null  — RDAP leg errored for another reason, or rdap_coverage: false
+    const registered: boolean | null = rdapNotFound
+      ? false
+      : rdapOk && reg
+        ? reg.rdap_coverage
+          ? true
+          : null
+        : null;
 
     return {
       domain: input.domain.toLowerCase(),
-      rdap_coverage: rdapOk ? (reg?.rdap_coverage ?? null) : null,
+      // rdapNotFound means RDAP server was reachable (coverage: true) but domain doesn't exist
+      rdap_coverage: rdapNotFound ? true : rdapOk ? (reg?.rdap_coverage ?? null) : null,
       registered,
       registrar: reg?.registrar,
       created_date: reg?.created_date,

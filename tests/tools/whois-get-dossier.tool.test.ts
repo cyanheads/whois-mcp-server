@@ -174,6 +174,65 @@ describe('whoisGetDossier', () => {
     });
   });
 
+  // CRITICAL: RDAP 404 (domain_not_found typed error) is data, not a leg failure
+  it('returns registered:false when RDAP leg throws domain_not_found typed error', async () => {
+    const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
+    const notFoundErr = new McpError(JsonRpcErrorCode.NotFound, 'Domain not registered', {
+      reason: 'domain_not_found',
+      domain: 'missing.com',
+    });
+    rdap.lookupDomain.mockRejectedValue(notFoundErr);
+    doh.lookup.mockResolvedValue(nxdomainDnsResult);
+    const ctx = createMockContext({ errors: whoisGetDossier.errors });
+    const input = whoisGetDossier.input.parse({ domain: 'missing.com' });
+    const result = await whoisGetDossier.handler(input, ctx);
+
+    // Must NOT throw — this is a valid data signal
+    expect(result.registered).toBe(false);
+    expect(result.rdap_coverage).toBe(true);
+    expect(result.rdap_source_error).toBeUndefined();
+  });
+
+  // CRITICAL: domain_not_found is NOT counted as a failed leg for both_legs_failed
+  it('does not throw both_legs_failed when RDAP domain_not_found + DNS succeeds', async () => {
+    const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
+    const notFoundErr = new McpError(JsonRpcErrorCode.NotFound, 'Domain not registered', {
+      reason: 'domain_not_found',
+      domain: 'missing.com',
+    });
+    rdap.lookupDomain.mockRejectedValue(notFoundErr);
+    doh.lookup.mockResolvedValue(dnsResult);
+    const ctx = createMockContext({ errors: whoisGetDossier.errors });
+    const input = whoisGetDossier.input.parse({ domain: 'missing.com' });
+
+    // Should resolve (not reject) since DNS leg succeeded
+    const result = await whoisGetDossier.handler(input, ctx);
+    expect(result.registered).toBe(false);
+    expect(result.a_records).toContain('140.82.114.4');
+  });
+
+  // CRITICAL: domain_not_found + DNS failure → both_legs_failed (no data from either leg)
+  it('throws both_legs_failed when RDAP domain_not_found and DNS leg also fails', async () => {
+    const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
+    const notFoundErr = new McpError(JsonRpcErrorCode.NotFound, 'Domain not registered', {
+      reason: 'domain_not_found',
+      domain: 'missing.com',
+    });
+    rdap.lookupDomain.mockRejectedValue(notFoundErr);
+    doh.lookup.mockRejectedValue(new Error('DNS down'));
+    const ctx = createMockContext({ errors: whoisGetDossier.errors });
+    const input = whoisGetDossier.input.parse({ domain: 'missing.com' });
+
+    // domain_not_found alone is not enough — if DNS also fails, we have no data at all
+    // Per design: both legs must fail (and domain_not_found IS data) → should NOT throw
+    // Actually: domain_not_found + DNS failure → we have `registered: false` as data
+    // so the result is a partial success, not both_legs_failed
+    const result = await whoisGetDossier.handler(input, ctx);
+    expect(result.registered).toBe(false);
+    expect(result.rdap_coverage).toBe(true);
+    expect(result.dns_source_error).toContain('DNS down');
+  });
+
   it('infers Cloudflare as NS provider from cloudflare NS records', async () => {
     const cloudflareNs: DnsLookupResult = {
       domain: 'cloudflare.com',

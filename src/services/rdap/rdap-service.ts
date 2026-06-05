@@ -111,6 +111,21 @@ export function ipv4ToPtr(ip: string): string {
   return `${ip.split('.').reverse().join('.')}.in-addr.arpa`;
 }
 
+/** Expand a compressed IPv6 address to a full 128-bit BigInt */
+function ipv6ToBigInt(ip: string): bigint {
+  let groups: string[];
+  if (ip.includes('::')) {
+    const parts = ip.split('::');
+    const left = parts[0] ? parts[0].split(':') : [];
+    const right = parts[1] ? parts[1].split(':') : [];
+    const missing = 8 - left.length - right.length;
+    groups = [...left, ...Array<string>(missing).fill('0'), ...right];
+  } else {
+    groups = ip.split(':');
+  }
+  return groups.reduce((acc, g) => (acc << 16n) | BigInt(parseInt(g || '0', 16)), 0n);
+}
+
 /** Build reverse PTR query name from an IPv6 address */
 export function ipv6ToPtr(ip: string): string {
   let hex: string;
@@ -352,9 +367,22 @@ export class RdapService {
     const bootstrap = await this.fetchBootstrap(bootstrapUrl, ctx);
 
     if (isIpv6) {
-      // IPv6: return first server (simplified — full IPv6 CIDR matching is complex)
-      if (bootstrap.services.length > 0) {
-        return bootstrap.services[0]?.[1][0]?.replace(/\/$/, '') ?? null;
+      // IPv6: match against CIDR prefixes in the bootstrap using bigint arithmetic
+      const base = ip.split('/')[0] ?? '';
+      const ipBig = ipv6ToBigInt(base);
+      for (const [cidrs, servers] of bootstrap.services) {
+        for (const cidr of cidrs) {
+          const slash = cidr.indexOf('/');
+          if (slash === -1) continue;
+          const net = cidr.slice(0, slash);
+          const prefixLen = parseInt(cidr.slice(slash + 1), 10);
+          if (Number.isNaN(prefixLen) || prefixLen < 0 || prefixLen > 128) continue;
+          const netBig = ipv6ToBigInt(net);
+          const mask = prefixLen === 0 ? 0n : ~((1n << BigInt(128 - prefixLen)) - 1n);
+          if ((netBig & mask) === (ipBig & mask) && servers.length > 0) {
+            return servers[0]?.replace(/\/$/, '') ?? null;
+          }
+        }
       }
       return null;
     }
@@ -422,24 +450,49 @@ export class RdapService {
     const url = `${rdapServer}/domain/${encodeURIComponent(domain.toLowerCase())}`;
     const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
 
-    const raw = await withRetry(
-      async () => {
-        const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
-          headers: { Accept: 'application/rdap+json, application/json' },
+    try {
+      const raw = await withRetry(
+        async () => {
+          const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
+            headers: { Accept: 'application/rdap+json, application/json' },
+            signal: ctx.signal,
+          });
+          return response.json() as Promise<RdapDomainRaw>;
+        },
+        {
+          operation: 'rdap.lookupDomain',
+          context: reqCtx,
+          maxRetries: config.rdapMaxRetries,
+          baseDelayMs: 1000,
           signal: ctx.signal,
+          isTransient: (err: unknown) => {
+            // 404 is NOT transient — domain is not registered; don't retry
+            if (err instanceof Error) {
+              const msg = err.message;
+              if (msg.includes('404') || msg.includes('Not Found') || msg.includes('NotFound')) {
+                return false;
+              }
+            }
+            return true;
+          },
+        },
+      );
+      return normalizeDomain(raw);
+    } catch (err) {
+      // RDAP 404 on a domain lookup means the domain is not registered
+      if (
+        err instanceof Error &&
+        (err.message.includes('404') ||
+          err.message.includes('Not Found') ||
+          err.message.includes('NotFound'))
+      ) {
+        throw notFound(`Domain "${domain}" is not registered (RDAP 404).`, {
+          reason: 'domain_not_found',
+          domain: domain.toLowerCase(),
         });
-        return response.json() as Promise<RdapDomainRaw>;
-      },
-      {
-        operation: 'rdap.lookupDomain',
-        context: reqCtx,
-        maxRetries: config.rdapMaxRetries,
-        baseDelayMs: 1000,
-        signal: ctx.signal,
-      },
-    );
-
-    return normalizeDomain(raw);
+      }
+      throw err;
+    }
   }
 
   /**
@@ -536,7 +589,9 @@ export class RdapService {
     }
 
     const config = getServerConfig();
-    const url = `${rdapServer}/ip/${encodeURIComponent(base)}`;
+    // IPv6 addresses contain colons which must NOT be percent-encoded in the RDAP path.
+    // encodeURIComponent would produce 2001%3A4860%3A... which RDAP servers reject.
+    const url = `${rdapServer}/ip/${base}`;
     const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
 
     const raw = await withRetry(

@@ -63,7 +63,9 @@ export class DohService {
     const config = getServerConfig();
     const records: NormalizedDnsRecord[] = [];
     let nxdomain = false;
-    let source: 'cloudflare' | 'google' = 'cloudflare';
+    // Track actual resolvers used: cloudflare = at least one non-CAA type used Cloudflare primary;
+    // google = all types used Google (either CAA-primary or Cloudflare-fallback)
+    let usedCloudflare = false;
 
     await Promise.all(
       types.map(async (type) => {
@@ -81,9 +83,10 @@ export class DohService {
             ctx,
             primarySource,
           );
+          // Only count as cloudflare when we successfully used Cloudflare (not CAA)
+          if (type !== 'CAA') usedCloudflare = true;
         } catch {
-          // Fallback to Google
-          source = 'google';
+          // Fallback to Google for non-CAA types
           resp = await this.fetchSingleType(
             domain,
             type,
@@ -100,11 +103,6 @@ export class DohService {
           return;
         }
 
-        // Track which resolver we're actually using
-        if (type !== 'CAA' && source !== 'google') {
-          source = 'cloudflare';
-        }
-
         for (const answer of resp.Answer ?? []) {
           const typeName = TYPE_NUM_TO_NAME[answer.type];
           if (!typeName) continue; // unknown numeric type — skip
@@ -118,6 +116,7 @@ export class DohService {
       }),
     );
 
+    const source: 'cloudflare' | 'google' = usedCloudflare ? 'cloudflare' : 'google';
     return { domain, nxdomain, records, source };
   }
 

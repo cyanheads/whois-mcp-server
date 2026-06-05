@@ -146,4 +146,19 @@ describe('whoisLookupDomain', () => {
     expect(text).toContain('example.zz');
     expect(text).toContain('No');
   });
+
+  // CRITICAL: RDAP 404 on lookupDomain must propagate as domain_not_found, not a generic error
+  it('propagates domain_not_found when service throws typed McpError with that reason', async () => {
+    const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
+    const notFoundErr = new McpError(JsonRpcErrorCode.NotFound, 'Domain not registered', {
+      reason: 'domain_not_found',
+      domain: 'example.com',
+    });
+    rdap.lookupDomain.mockRejectedValue(notFoundErr);
+    const ctx = createMockContext({ errors: whoisLookupDomain.errors });
+    const input = whoisLookupDomain.input.parse({ domain: 'example.com' });
+    await expect(whoisLookupDomain.handler(input, ctx)).rejects.toMatchObject({
+      data: { reason: 'domain_not_found' },
+    });
+  });
 });
