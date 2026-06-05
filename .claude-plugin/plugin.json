@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/whois-mcp-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads"
