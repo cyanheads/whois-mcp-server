@@ -161,4 +161,29 @@ describe('whoisLookupDomain', () => {
       data: { reason: 'domain_not_found' },
     });
   });
+
+  // CRITICAL: domain_not_found must include recovery.hint so agents can act on it
+  it('includes recovery.hint in domain_not_found error', async () => {
+    const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
+    const notFoundErr = new McpError(
+      JsonRpcErrorCode.NotFound,
+      'Domain "example.com" is not registered (RDAP 404).',
+      {
+        reason: 'domain_not_found',
+        domain: 'example.com',
+      },
+    );
+    rdap.lookupDomain.mockRejectedValue(notFoundErr);
+    const ctx = createMockContext({ errors: whoisLookupDomain.errors });
+    const input = whoisLookupDomain.input.parse({ domain: 'example.com' });
+    try {
+      await whoisLookupDomain.handler(input, ctx);
+      throw new Error('expected rejection');
+    } catch (err: unknown) {
+      const mcpErr = err as { data?: { recovery?: { hint?: string }; reason?: string } };
+      expect(mcpErr.data?.reason).toBe('domain_not_found');
+      expect(mcpErr.data?.recovery?.hint).toBeTruthy();
+      expect(typeof mcpErr.data?.recovery?.hint).toBe('string');
+    }
+  });
 });

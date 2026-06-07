@@ -11,11 +11,10 @@ import { isValidFqdn } from './_fqdn.js';
 export const whoisCheckAvailability = tool('whois_check_availability', {
   title: 'Domain Availability Check',
   description:
-    'Check whether a domain name is registered or available for registration. RDAP 404 = available — ' +
-    'this is the RDAP spec behavior, modeled as data (available: true) not an error. Returns available: false ' +
-    'with registrar and expiry_date when the domain is registered. When the TLD has no RDAP coverage, returns ' +
-    'available: null with rdap_coverage: false — availability cannot be determined. Designed for "can I register X" ' +
-    'and bulk name sweeps. For the full registration record use whois_lookup_domain.',
+    'Check whether a domain name is registered or available for registration. Returns available: true when ' +
+    'the domain is not registered, available: false with registrar and expiry_date when it is registered, and ' +
+    'available: null with rdap_coverage: false when the TLD has no RDAP coverage. ' +
+    'Designed for "can I register X" and bulk name sweeps. For the full registration record use whois_lookup_domain.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
@@ -33,7 +32,7 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
       .boolean()
       .nullable()
       .describe(
-        'True = available for registration (RDAP 404). False = registered. ' +
+        'True = available for registration. False = registered. ' +
           'Null = rdap_coverage is false — cannot determine availability for this TLD.',
       ),
     rdap_coverage: z.boolean().describe('True when a RDAP server was found for this TLD.'),
@@ -48,13 +47,6 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
       when: 'Input is not a valid FQDN.',
       recovery:
         'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".',
-    },
-    {
-      reason: 'rdap_no_coverage',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'TLD has no RDAP server — available is null, cannot determine registration status.',
-      recovery:
-        'This TLD has no RDAP coverage; availability cannot be determined programmatically.',
     },
   ],
 

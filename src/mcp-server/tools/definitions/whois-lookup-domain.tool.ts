@@ -4,8 +4,9 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
+import type { NormalizedDomain } from '@/services/rdap/types.js';
 import { isValidFqdn } from './_fqdn.js';
 
 export const whoisLookupDomain = tool('whois_lookup_domain', {
@@ -14,8 +15,8 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
     "Look up a domain's registration record — registrar, created/expiry dates, nameservers, EPP status codes, " +
     'DNSSEC flag, and registrant org (where not privacy-redacted). Uses RDAP via IANA bootstrap to auto-select ' +
     'the correct per-TLD RDAP server, returning one normalized shape regardless of TLD. When the TLD has no RDAP ' +
-    'coverage, returns rdap_coverage: false. RDAP 404 (domain not registered) throws domain_not_found — use ' +
-    'whois_check_availability instead if you want to test registration status without an error.',
+    'coverage, returns rdap_coverage: false. If the domain is not registered, throws domain_not_found — use ' +
+    'whois_check_availability to test availability without triggering an error.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
@@ -97,7 +98,22 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
 
     ctx.log.info('RDAP domain lookup', { domain: input.domain });
 
-    const record = await getRdapService().lookupDomain(input.domain, ctx);
+    let record: NormalizedDomain;
+    try {
+      record = await getRdapService().lookupDomain(input.domain, ctx);
+    } catch (err) {
+      // Re-throw domain_not_found with recovery hint from the typed contract
+      if (
+        err instanceof McpError &&
+        (err.data as { reason?: string } | undefined)?.reason === 'domain_not_found'
+      ) {
+        throw ctx.fail('domain_not_found', err.message, {
+          domain: input.domain.toLowerCase(),
+          ...ctx.recoveryFor('domain_not_found'),
+        });
+      }
+      throw err;
+    }
 
     if (!record.rdap_coverage) {
       throw ctx.fail('rdap_no_coverage', `No RDAP server found for the TLD of "${input.domain}".`, {
