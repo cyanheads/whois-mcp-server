@@ -1,6 +1,6 @@
 /**
- * @fileoverview DNS-over-HTTPS service — Cloudflare primary (1.1.1.1), Google fallback (8.8.8.8).
- * CAA records always use Google DoH because Cloudflare returns raw hex wire format for them.
+ * @fileoverview DNS-over-HTTPS service — Cloudflare primary (1.1.1.1), NextDNS fallback.
+ * CAA records always use NextDNS because Cloudflare returns raw hex wire format for them.
  * @module services/doh/doh-service
  */
 
@@ -13,7 +13,7 @@ import type { DnsLookupResult, DnsRecordType, DohResponse, NormalizedDnsRecord }
 import { DNS_TYPE_NUMBERS } from './types.js';
 
 const CLOUDFLARE_DOH = 'https://cloudflare-dns.com/dns-query';
-const GOOGLE_DOH = 'https://dns.google/resolve';
+const NEXTDNS_DOH = 'https://dns.nextdns.io';
 
 /** Map numeric type to DnsRecordType string */
 const TYPE_NUM_TO_NAME: Record<number, DnsRecordType> = Object.fromEntries(
@@ -28,7 +28,7 @@ export class DohService {
     baseUrl: string,
     timeoutMs: number,
     ctx: Context,
-    source: 'cloudflare' | 'google',
+    source: 'cloudflare' | 'nextdns',
   ): Promise<DohResponse> {
     const url = `${baseUrl}?name=${encodeURIComponent(domain)}&type=${encodeURIComponent(type)}`;
     const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
@@ -55,8 +55,8 @@ export class DohService {
 
   /**
    * Look up one or more DNS record types for a domain.
-   * CAA always uses Google DoH (Cloudflare returns raw hex).
-   * Falls back to Google if Cloudflare fails for any type.
+   * CAA always uses NextDNS DoH (Cloudflare returns raw hex).
+   * Falls back to NextDNS if Cloudflare fails for any type.
    * Returns `nxdomain: true` when NXDOMAIN (Status 3) is returned.
    */
   async lookup(domain: string, types: DnsRecordType[], ctx: Context): Promise<DnsLookupResult> {
@@ -64,14 +64,14 @@ export class DohService {
     const records: NormalizedDnsRecord[] = [];
     let nxdomain = false;
     // Track actual resolvers used: cloudflare = at least one non-CAA type used Cloudflare primary;
-    // google = all types used Google (either CAA-primary or Cloudflare-fallback)
+    // nextdns = all types used NextDNS (either CAA-primary or Cloudflare-fallback)
     let usedCloudflare = false;
 
     await Promise.all(
       types.map(async (type) => {
-        // CAA always via Google; everything else Cloudflare first
-        const primaryUrl = type === 'CAA' ? GOOGLE_DOH : CLOUDFLARE_DOH;
-        const primarySource: 'cloudflare' | 'google' = type === 'CAA' ? 'google' : 'cloudflare';
+        // CAA always via NextDNS; everything else Cloudflare first
+        const primaryUrl = type === 'CAA' ? NEXTDNS_DOH : CLOUDFLARE_DOH;
+        const primarySource: 'cloudflare' | 'nextdns' = type === 'CAA' ? 'nextdns' : 'cloudflare';
 
         let resp: DohResponse;
         try {
@@ -86,14 +86,14 @@ export class DohService {
           // Only count as cloudflare when we successfully used Cloudflare (not CAA)
           if (type !== 'CAA') usedCloudflare = true;
         } catch {
-          // Fallback to Google for non-CAA types
+          // Fallback to NextDNS for non-CAA types
           resp = await this.fetchSingleType(
             domain,
             type,
-            GOOGLE_DOH,
+            NEXTDNS_DOH,
             config.dohTimeoutMs,
             ctx,
-            'google',
+            'nextdns',
           );
         }
 
@@ -116,7 +116,7 @@ export class DohService {
       }),
     );
 
-    const source: 'cloudflare' | 'google' = usedCloudflare ? 'cloudflare' : 'google';
+    const source: 'cloudflare' | 'nextdns' = usedCloudflare ? 'cloudflare' : 'nextdns';
     return { domain, nxdomain, records, source };
   }
 

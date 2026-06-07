@@ -53,5 +53,5 @@ export interface DnsLookupResult {
   domain: string;
   nxdomain: boolean;
   records: NormalizedDnsRecord[];
-  source: 'cloudflare' | 'google';
+  source: 'cloudflare' | 'nextdns';
 }

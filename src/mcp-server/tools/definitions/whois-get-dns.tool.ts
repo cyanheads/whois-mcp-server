@@ -14,11 +14,9 @@ const DNS_RECORD_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME', 'SOA', 'CAA',
 export const whoisGetDns = tool('whois_get_dns', {
   title: 'DNS Record Lookup',
   description:
-    'Fetch DNS records for a domain via DNS-over-HTTPS. Uses Cloudflare 1.1.1.1 as primary resolver ' +
-    'with Google 8.8.8.8 as fallback (and primary for CAA records, since Cloudflare returns raw hex ' +
-    'wire format for those). Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR. Multiple types ' +
-    'are fetched in parallel. NXDOMAIN is returned as nxdomain: true in the result, not as an error — ' +
-    'it means the domain does not exist in DNS.',
+    'Fetch DNS records for a domain via DNS-over-HTTPS. Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR. ' +
+    'Multiple types are fetched in parallel. NXDOMAIN is returned as nxdomain: true in the result, not as an ' +
+    'error — it means the domain does not exist in DNS.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
@@ -57,9 +55,9 @@ export const whoisGetDns = tool('whois_get_dns', {
       )
       .describe('DNS records returned for the requested types.'),
     source: z
-      .enum(['cloudflare', 'google'])
+      .enum(['cloudflare', 'nextdns'])
       .describe(
-        'The DoH resolver that provided results (cloudflare = primary, google = fallback or CAA).',
+        'The DoH resolver that provided results (cloudflare = primary used for most types, nextdns = fallback or CAA).',
       ),
   }),
 

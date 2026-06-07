@@ -150,4 +150,18 @@ describe('whoisGetDns', () => {
     expect(text).toContain('sparse.com');
     expect(text).toContain('No records');
   });
+
+  it('formats output with nextdns source correctly', () => {
+    const nextdnsResult: DnsLookupResult = {
+      domain: 'example.com',
+      nxdomain: false,
+      records: [
+        { type: 'CAA', name: 'example.com', ttl: 86400, data: '0 issue "letsencrypt.org"' },
+      ],
+      source: 'nextdns',
+    };
+    const blocks = whoisGetDns.format!(nextdnsResult);
+    const text = (blocks[0] as { text: string }).text;
+    expect(text).toContain('nextdns');
+  });
 });
