@@ -15,6 +15,8 @@ import { initDohService } from './services/doh/doh-service.js';
 import { initRdapService } from './services/rdap/rdap-service.js';
 
 await createApp({
+  name: 'whois-mcp-server',
+  title: 'whois-mcp-server',
   tools: [
     whoisLookupDomain,
     whoisCheckAvailability,

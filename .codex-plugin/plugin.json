@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/whois-mcp-server",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
@@ -29,7 +29,7 @@
   ],
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
-    "displayName": "@cyanheads/whois-mcp-server",
+    "displayName": "whois-mcp-server",
     "shortDescription": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
     "longDescription": "",
     "developerName": "cyanheads",
