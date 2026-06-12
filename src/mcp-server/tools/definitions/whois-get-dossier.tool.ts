@@ -184,7 +184,7 @@ export const whoisGetDossier = tool('whois_get_dossier', {
   errors: [
     {
       reason: 'invalid_domain',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Input is not a valid FQDN.',
       recovery:
         'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".',

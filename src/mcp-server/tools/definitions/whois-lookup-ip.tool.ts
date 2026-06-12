@@ -56,14 +56,14 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
   errors: [
     {
       reason: 'invalid_ip',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Input is not a valid IPv4, IPv6, or CIDR address.',
       recovery:
         'Provide a valid IPv4 (e.g., "8.8.8.8"), IPv6 (e.g., "2001:db8::1"), or CIDR (e.g., "192.0.2.0/24").',
     },
     {
       reason: 'private_range',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Input is a private or reserved range — no RIR RDAP record exists for it.',
       recovery:
         'Use a public, globally-routable IP address. RFC 1918, loopback, and link-local addresses have no RIR records.',

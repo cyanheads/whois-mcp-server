@@ -47,7 +47,7 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
   errors: [
     {
       reason: 'invalid_asn',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Input does not match AS<number> or bare integer format.',
       recovery: 'Provide a valid ASN like "AS15169" or "15169". Numbers must be positive integers.',
     },

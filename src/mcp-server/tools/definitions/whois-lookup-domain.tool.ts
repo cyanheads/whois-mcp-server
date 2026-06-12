@@ -68,7 +68,7 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
   errors: [
     {
       reason: 'invalid_domain',
-      code: JsonRpcErrorCode.InvalidParams,
+      code: JsonRpcErrorCode.ValidationError,
       when: 'Input is not a valid FQDN.',
       recovery:
         'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".',

@@ -120,7 +120,7 @@ describe('whoisLookupIp', () => {
 
   it('propagates private_range error thrown by the RDAP service', async () => {
     const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
-    const privateErr = new McpError(JsonRpcErrorCode.InvalidParams, 'private range', {
+    const privateErr = new McpError(JsonRpcErrorCode.ValidationError, 'private range', {
       reason: 'private_range',
     });
     rdap.lookupIp.mockRejectedValue(privateErr);

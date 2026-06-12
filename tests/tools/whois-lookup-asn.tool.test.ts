@@ -81,7 +81,7 @@ describe('whoisLookupAsn', () => {
 
   it('propagates invalid_asn error from service for non-numeric input', async () => {
     const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
-    const invalidErr = new McpError(JsonRpcErrorCode.InvalidParams, 'invalid ASN', {
+    const invalidErr = new McpError(JsonRpcErrorCode.ValidationError, 'invalid ASN', {
       reason: 'invalid_asn',
     });
     rdap.lookupAsn.mockRejectedValue(invalidErr);
