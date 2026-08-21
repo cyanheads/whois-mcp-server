@@ -31,11 +31,10 @@ export class DohService {
     source: 'cloudflare' | 'nextdns',
   ): Promise<DohResponse> {
     const url = `${baseUrl}?name=${encodeURIComponent(domain)}&type=${encodeURIComponent(type)}`;
-    const reqCtx = { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
 
     return withRetry(
       async () => {
-        const response = await fetchWithTimeout(url, timeoutMs, reqCtx, {
+        const response = await fetchWithTimeout(url, timeoutMs, ctx, {
           headers: {
             Accept: 'application/dns-json',
           },
@@ -45,7 +44,7 @@ export class DohService {
       },
       {
         operation: `doh.fetchSingleType.${source}`,
-        context: reqCtx,
+        context: ctx,
         maxRetries: getServerConfig().dohMaxRetries,
         baseDelayMs: 500,
         signal: ctx.signal,
