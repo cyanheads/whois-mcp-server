@@ -6,7 +6,12 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
-import { notFound, serviceUnavailable, validationError } from '@cyanheads/mcp-ts-core/errors';
+import {
+  McpError,
+  notFound,
+  serviceUnavailable,
+  validationError,
+} from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
@@ -320,14 +325,15 @@ function normalizeAutnum(raw: RdapAutnumRaw, asn: string): NormalizedAsn {
   return result;
 }
 
+/** True when the error is an RDAP 404 — the queried object does not exist upstream. */
+function isRdapNotFound(err: unknown): boolean {
+  return err instanceof McpError && err.data?.status === 404;
+}
+
 // ─── Service class ────────────────────────────────────────────────────────────
 
 export class RdapService {
   private bootstrapCache: Map<string, { data: IanaBootstrap; fetchedAt: number }> = new Map();
-
-  private reqCtx(ctx: Context) {
-    return { requestId: ctx.requestId, tenantId: ctx.tenantId, timestamp: ctx.timestamp };
-  }
 
   /** Fetch and cache a bootstrap JSON from IANA */
   private async fetchBootstrap(url: string, ctx: Context): Promise<IanaBootstrap> {
@@ -337,8 +343,7 @@ export class RdapService {
     }
 
     const config = getServerConfig();
-    const reqCtx = this.reqCtx(ctx);
-    const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
+    const response = await fetchWithTimeout(url, config.rdapTimeoutMs, ctx, {
       headers: { Accept: 'application/json' },
       signal: ctx.signal,
     });
@@ -452,44 +457,31 @@ export class RdapService {
 
     const config = getServerConfig();
     const url = `${rdapServer}/domain/${encodeURIComponent(domain.toLowerCase())}`;
-    const reqCtx = this.reqCtx(ctx);
 
     try {
       const raw = await withRetry(
         async () => {
-          const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
+          const response = await fetchWithTimeout(url, config.rdapTimeoutMs, ctx, {
             headers: { Accept: 'application/rdap+json, application/json' },
             signal: ctx.signal,
+            expectedStatuses: [404],
           });
           return response.json() as Promise<RdapDomainRaw>;
         },
         {
           operation: 'rdap.lookupDomain',
-          context: reqCtx,
+          context: ctx,
           maxRetries: config.rdapMaxRetries,
           baseDelayMs: 1000,
           signal: ctx.signal,
-          isTransient: (err: unknown) => {
-            // 404 is NOT transient — domain is not registered; don't retry
-            if (err instanceof Error) {
-              const msg = err.message;
-              if (msg.includes('404') || msg.includes('Not Found') || msg.includes('NotFound')) {
-                return false;
-              }
-            }
-            return true;
-          },
+          // 404 is NOT transient — domain is not registered; don't retry
+          isTransient: (err: unknown) => !isRdapNotFound(err),
         },
       );
       return normalizeDomain(raw);
     } catch (err) {
       // RDAP 404 on a domain lookup means the domain is not registered
-      if (
-        err instanceof Error &&
-        (err.message.includes('404') ||
-          err.message.includes('Not Found') ||
-          err.message.includes('NotFound'))
-      ) {
+      if (isRdapNotFound(err)) {
         throw notFound(`Domain "${domain}" is not registered (RDAP 404).`, {
           reason: 'domain_not_found',
           domain: domain.toLowerCase(),
@@ -520,33 +512,25 @@ export class RdapService {
 
     const config = getServerConfig();
     const url = `${rdapServer}/domain/${encodeURIComponent(domain.toLowerCase())}`;
-    const reqCtx = this.reqCtx(ctx);
 
     try {
       const raw = await withRetry(
         async () => {
-          const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
+          const response = await fetchWithTimeout(url, config.rdapTimeoutMs, ctx, {
             headers: { Accept: 'application/rdap+json, application/json' },
             signal: ctx.signal,
+            expectedStatuses: [404],
           });
           return response.json() as Promise<RdapDomainRaw>;
         },
         {
           operation: 'rdap.checkAvailability',
-          context: reqCtx,
+          context: ctx,
           maxRetries: config.rdapMaxRetries,
           baseDelayMs: 1000,
           signal: ctx.signal,
-          isTransient: (err: unknown) => {
-            if (err instanceof Error) {
-              const msg = err.message;
-              // 404 is NOT transient — it's the availability signal
-              if (msg.includes('404') || msg.includes('Not Found') || msg.includes('NotFound')) {
-                return false;
-              }
-            }
-            return true;
-          },
+          // 404 is NOT transient — it's the availability signal
+          isTransient: (err: unknown) => !isRdapNotFound(err),
         },
       );
 
@@ -554,12 +538,7 @@ export class RdapService {
       return { available: false, record };
     } catch (err) {
       // A 404 from the RDAP server means the domain is available (not registered)
-      if (
-        err instanceof Error &&
-        (err.message.includes('404') ||
-          err.message.includes('Not Found') ||
-          err.message.includes('NotFound'))
-      ) {
+      if (isRdapNotFound(err)) {
         return { available: true };
       }
       throw err;
@@ -596,26 +575,39 @@ export class RdapService {
     // IPv6 addresses contain colons which must NOT be percent-encoded in the RDAP path.
     // encodeURIComponent would produce 2001%3A4860%3A... which RDAP servers reject.
     const url = `${rdapServer}/ip/${base}`;
-    const reqCtx = this.reqCtx(ctx);
 
-    const raw = await withRetry(
-      async () => {
-        const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
-          headers: { Accept: 'application/rdap+json, application/json' },
+    try {
+      const raw = await withRetry(
+        async () => {
+          const response = await fetchWithTimeout(url, config.rdapTimeoutMs, ctx, {
+            headers: { Accept: 'application/rdap+json, application/json' },
+            signal: ctx.signal,
+            expectedStatuses: [404],
+          });
+          return response.json() as Promise<RdapIpNetworkRaw>;
+        },
+        {
+          operation: 'rdap.lookupIp',
+          context: ctx,
+          maxRetries: config.rdapMaxRetries,
+          baseDelayMs: 1000,
           signal: ctx.signal,
-        });
-        return response.json() as Promise<RdapIpNetworkRaw>;
-      },
-      {
-        operation: 'rdap.lookupIp',
-        context: reqCtx,
-        maxRetries: config.rdapMaxRetries,
-        baseDelayMs: 1000,
-        signal: ctx.signal,
-      },
-    );
+          // 404 is NOT transient — no netblock record exists; don't retry
+          isTransient: (err: unknown) => !isRdapNotFound(err),
+        },
+      );
 
-    return normalizeIpNetwork(raw, ip);
+      return normalizeIpNetwork(raw, ip);
+    } catch (err) {
+      // RDAP 404 on an IP lookup means no netblock record exists upstream
+      if (isRdapNotFound(err)) {
+        throw notFound(`IP "${ip}" has no netblock record in RIR RDAP (404).`, {
+          reason: 'ip_not_found',
+          ...ctx.recoveryFor('ip_not_found'),
+        });
+      }
+      throw err;
+    }
   }
 
   /** Look up an ASN via RIR RDAP */
@@ -642,26 +634,39 @@ export class RdapService {
 
     const config = getServerConfig();
     const url = `${rdapServer}/autnum/${asnNum}`;
-    const reqCtx = this.reqCtx(ctx);
 
-    const raw = await withRetry(
-      async () => {
-        const response = await fetchWithTimeout(url, config.rdapTimeoutMs, reqCtx, {
-          headers: { Accept: 'application/rdap+json, application/json' },
+    try {
+      const raw = await withRetry(
+        async () => {
+          const response = await fetchWithTimeout(url, config.rdapTimeoutMs, ctx, {
+            headers: { Accept: 'application/rdap+json, application/json' },
+            signal: ctx.signal,
+            expectedStatuses: [404],
+          });
+          return response.json() as Promise<RdapAutnumRaw>;
+        },
+        {
+          operation: 'rdap.lookupAsn',
+          context: ctx,
+          maxRetries: config.rdapMaxRetries,
+          baseDelayMs: 1000,
           signal: ctx.signal,
-        });
-        return response.json() as Promise<RdapAutnumRaw>;
-      },
-      {
-        operation: 'rdap.lookupAsn',
-        context: reqCtx,
-        maxRetries: config.rdapMaxRetries,
-        baseDelayMs: 1000,
-        signal: ctx.signal,
-      },
-    );
+          // 404 is NOT transient — the ASN is not registered; don't retry
+          isTransient: (err: unknown) => !isRdapNotFound(err),
+        },
+      );
 
-    return normalizeAutnum(raw, `AS${asnNum}`);
+      return normalizeAutnum(raw, `AS${asnNum}`);
+    } catch (err) {
+      // RDAP 404 on an ASN lookup means the ASN is not registered upstream
+      if (isRdapNotFound(err)) {
+        throw notFound(`ASN ${asnNum} not found (RDAP 404).`, {
+          reason: 'asn_not_found',
+          ...ctx.recoveryFor('asn_not_found'),
+        });
+      }
+      throw err;
+    }
   }
 }
 
