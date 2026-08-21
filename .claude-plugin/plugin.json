@@ -1,6 +1,6 @@
 {
-  "name": "@cyanheads/whois-mcp-server",
-  "version": "0.1.3",
+  "name": "whois-mcp-server",
+  "version": "0.1.4",
   "description": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads"
@@ -9,7 +9,7 @@
   "repository": "git+https://github.com/cyanheads/whois-mcp-server.git",
   "license": "Apache-2.0",
   "mcpServers": {
-    "@cyanheads/whois-mcp-server": {
+    "whois-mcp-server": {
       "command": "npx",
       "args": ["-y", "@cyanheads/whois-mcp-server"],
       "env": {

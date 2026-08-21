@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.1.4](changelog/0.1.x/0.1.4.md) — 2026-08-21
+
+Adopt mcp-ts-core 0.12.3 (SDK v2 era) — strict tool inputs, error-envelope output schemas; IP/ASN RDAP 404s now reject as NotFound with recovery hints; supply-chain install guard
+
 ## [0.1.3](changelog/0.1.x/0.1.3.md) — 2026-06-12
 
 Adopt mcp-ts-core 0.10.6 — server identity fields, Docker healthcheck; input-validation errors reclassified to ValidationError

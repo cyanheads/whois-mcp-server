@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.3-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/whois-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/whois-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/whois-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.11-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/whois-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/whois-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/whois-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -61,9 +61,9 @@ Check whether a domain name is registered or available to register.
 
 Fetch DNS records via DNS-over-HTTPS.
 
-- Cloudflare `1.1.1.1` primary, Google `8.8.8.8` fallback (used for CAA records where Cloudflare returns raw hex)
+- Cloudflare primary, NextDNS fallback (CAA records always use NextDNS — Cloudflare returns raw hex wire format for them)
 - Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR — multiple types in one call
-- Returns records with TTLs and the resolving source (`cloudflare` or `google`)
+- Returns records with TTLs and the resolving source (`cloudflare` or `nextdns`)
 - `nxdomain: true` in result (not an error) when the domain doesn't exist in DNS
 
 ---
@@ -116,8 +116,8 @@ Domain and network intelligence:
 
 - RDAP over HTTPS — no port-43 TCP dependency, runs on Node, Bun, and Cloudflare Workers
 - IANA bootstrap auto-selection — correct registry RDAP server picked per TLD, RIR, or ASN range; bootstrap JSON cached (TTL 24h) in tenant state
-- DNS-over-HTTPS via Cloudflare and Google — resilient dual-provider with per-type routing (Google for CAA; Cloudflare for all others)
-- No API keys required — all sources (IANA, registry RDAP endpoints, RIR RDAP, Cloudflare DoH, Google DoH) are public and keyless
+- DNS-over-HTTPS via Cloudflare and NextDNS — resilient dual-provider with per-type routing (NextDNS for CAA; Cloudflare for all others)
+- No API keys required — all sources (IANA, registry RDAP endpoints, RIR RDAP, Cloudflare DoH, NextDNS DoH) are public and keyless
 
 Agent-friendly output:
 
@@ -282,7 +282,7 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 | `src/index.ts` | `createApp()` entry point — registers tools and inits services. |
 | `src/config/` | Server-specific environment variable parsing and validation (Zod). |
 | `src/services/rdap/` | RDAP client — IANA bootstrap cache, domain/IP/ASN lookup, retry. |
-| `src/services/doh/` | DNS-over-HTTPS client — Cloudflare primary, Google fallback. |
+| `src/services/doh/` | DNS-over-HTTPS client — Cloudflare primary, NextDNS fallback. |
 | `src/mcp-server/tools/` | Tool definitions (`*.tool.ts`). |
 | `tests/` | Vitest tests mirroring `src/`. |
 | `docs/` | Design and API reference documents. |

@@ -1,6 +1,6 @@
 {
-  "name": "@cyanheads/whois-mcp-server",
-  "version": "0.1.3",
+  "name": "whois-mcp-server",
+  "version": "0.1.4",
   "description": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
@@ -31,7 +31,7 @@
   "interface": {
     "displayName": "whois-mcp-server",
     "shortDescription": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
-    "longDescription": "",
+    "longDescription": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS. Six tools: whois_lookup_domain (full registration record), whois_check_availability (RDAP 404 = available), whois_get_dns (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR), whois_lookup_ip (netblock, org, abuse contact, PTR), whois_lookup_asn (ASN to org/RIR), and whois_get_dossier (one-call domain triage). IANA bootstrap auto-routes each query to the correct RDAP server; no API keys required. Runs over stdio or Streamable HTTP.",
     "developerName": "cyanheads",
     "category": "developer-tools",
     "capabilities": ["Read"],
