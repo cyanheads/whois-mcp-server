@@ -1,13 +1,33 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "whois-mcp-server",
   "version": "0.1.4",
   "description": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "cyanheads"
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
   "homepage": "https://github.com/cyanheads/whois-mcp-server#readme",
   "repository": "git+https://github.com/cyanheads/whois-mcp-server.git",
   "license": "Apache-2.0",
+  "keywords": [
+    "whois",
+    "rdap",
+    "dns",
+    "domain",
+    "ip",
+    "asn",
+    "dns-over-https",
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "typescript",
+    "bun",
+    "stdio",
+    "streamable-http",
+    "ai-agent"
+  ],
   "mcpServers": {
     "whois-mcp-server": {
       "command": "npx",
