@@ -1,6 +1,6 @@
 # whois-mcp-server - Directory Structure
 
-Generated on: 2026-08-21 15:00:05
+Generated on: 2026-09-20 20:39:08
 
 ```text
 whois-mcp-server/
@@ -14,8 +14,11 @@ whois-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
+│   ├── workflows/
+│   │   └── codeql.yml
 │   ├── CODE_OF_CONDUCT.md
 │   ├── CONTRIBUTING.md
+│   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .vscode/
 │   ├── extensions.json
@@ -26,23 +29,7 @@ whois-mcp-server/
 ├── docs/
 │   ├── design.md
 │   └── idea.md
-├── scripts/
-│   ├── build-changelog.ts
-│   ├── build.ts
-│   ├── check-dependency-specifiers.ts
-│   ├── check-docs-sync.ts
-│   ├── check-framework-antipatterns.ts
-│   ├── check-skill-versions.ts
-│   ├── check-skills-sync.ts
-│   ├── clean-mcpb.ts
-│   ├── clean.ts
-│   ├── devcheck.ts
-│   ├── lint-mcp.ts
-│   ├── lint-packaging.ts
-│   ├── list-skills.ts
-│   ├── release-github.ts
-│   └── tree.ts
-├── skills/
+├── framework-skills/
 │   ├── add-app-tool/
 │   │   └── SKILL.md
 │   ├── add-prompt/
@@ -113,6 +100,8 @@ whois-mcp-server/
 │   │   └── SKILL.md
 │   ├── release-and-publish/
 │   │   └── SKILL.md
+│   ├── release-pr-review/
+│   │   └── SKILL.md
 │   ├── report-issue-framework/
 │   │   └── SKILL.md
 │   ├── report-issue-local/
@@ -127,6 +116,22 @@ whois-mcp-server/
 │   │   └── SKILL.md
 │   └── tool-defs-analysis/
 │       └── SKILL.md
+├── scripts/
+│   ├── build-changelog.ts
+│   ├── build.ts
+│   ├── check-dependency-specifiers.ts
+│   ├── check-docs-sync.ts
+│   ├── check-framework-antipatterns.ts
+│   ├── check-skill-versions.ts
+│   ├── check-skills-sync.ts
+│   ├── clean-mcpb.ts
+│   ├── clean.ts
+│   ├── devcheck.ts
+│   ├── lint-mcp.ts
+│   ├── lint-packaging.ts
+│   ├── list-skills.ts
+│   ├── release-github.ts
+│   └── tree.ts
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -151,19 +156,21 @@ whois-mcp-server/
 │   │   └── rdap/
 │   │       ├── rdap-service.ts
 │   │       └── types.ts
+│   ├── app.ts
 │   └── index.ts
 ├── tests/
 │   ├── prompts/
 │   ├── resources/
 │   ├── services/
 │   │   └── rdap-service.test.ts
-│   └── tools/
-│       ├── whois-check-availability.tool.test.ts
-│       ├── whois-get-dns.tool.test.ts
-│       ├── whois-get-dossier.tool.test.ts
-│       ├── whois-lookup-asn.tool.test.ts
-│       ├── whois-lookup-domain.tool.test.ts
-│       └── whois-lookup-ip.tool.test.ts
+│   ├── tools/
+│   │   ├── whois-check-availability.tool.test.ts
+│   │   ├── whois-get-dns.tool.test.ts
+│   │   ├── whois-get-dossier.tool.test.ts
+│   │   ├── whois-lookup-asn.tool.test.ts
+│   │   ├── whois-lookup-domain.tool.test.ts
+│   │   └── whois-lookup-ip.tool.test.ts
+│   └── app.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
