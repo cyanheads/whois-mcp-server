@@ -67,6 +67,7 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
       when: 'Input is a private or reserved range — no RIR RDAP record exists for it.',
       recovery:
         'Use a public, globally-routable IP address. RFC 1918, loopback, and link-local addresses have no RIR records.',
+      thrownBy: 'service',
     },
     {
       reason: 'ip_not_found',
@@ -74,6 +75,7 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
       when: 'RIR RDAP returned 404 — no netblock record for this address.',
       recovery:
         'The IP address is not found in any RIR RDAP database. Try a different IP or verify it is globally routable.',
+      thrownBy: 'service',
     },
   ],
 

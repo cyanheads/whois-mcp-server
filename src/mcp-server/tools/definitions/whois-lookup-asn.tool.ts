@@ -50,6 +50,7 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'Input does not match AS<number> or bare integer format.',
       recovery: 'Provide a valid ASN like "AS15169" or "15169". Numbers must be positive integers.',
+      thrownBy: 'service',
     },
     {
       reason: 'asn_not_found',
@@ -57,6 +58,7 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
       when: 'RDAP returned 404 — ASN not found in any RIR.',
       recovery:
         'The ASN is not found in any RIR RDAP database. Verify the ASN number is correct and assigned.',
+      thrownBy: 'service',
     },
   ],
 
