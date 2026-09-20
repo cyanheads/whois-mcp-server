@@ -21,9 +21,11 @@
 
 ---
 
-## Tools
+## Overview
 
-Six tools covering domain intelligence, DNS, and IP/ASN resolution:
+Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain registrations, check availability, fetch DNS records, and resolve IPs and ASNs to their registries — all via public, keyless data sources. Runs as a stdio process or a local Streamable HTTP server.
+
+### Tools
 
 | Tool | Description |
 |:-----|:------------|
@@ -34,97 +36,84 @@ Six tools covering domain intelligence, DNS, and IP/ASN resolution:
 | `whois_lookup_asn` | Resolve an ASN to its org name, country, and RIR source |
 | `whois_get_dossier` | One-call domain triage — registration + DNS in parallel, normalized into a single record with factual signals |
 
-### `whois_lookup_domain`
+---
 
-Look up a domain's full RDAP registration record.
+## Capability reference
+
+### `whois_lookup_domain` <sub>tool</sub>
 
 - RDAP-first via IANA auto-bootstrap — automatically selects the correct registry RDAP server per TLD
-- Returns registrar, creation/expiry dates, nameservers, EPP status codes, DNSSEC delegation flag
-- Surfaces `registrant_redacted: true` explicitly when privacy redaction is in effect (standard post-GDPR for gTLDs)
-- Returns `rdap_coverage: false` for TLDs without RDAP coverage rather than silently failing
-- Includes `last_update_of_rdap_db` event timestamp for data freshness transparency
+- Returns registrar, creation/expiry dates, nameservers, EPP status codes, and DNSSEC delegation flag
+- Surfaces `registrant_redacted: true` when privacy redaction is in effect (standard post-GDPR for gTLDs)
+- Throws `rdap_no_coverage` when the TLD has no RDAP server in the IANA bootstrap — use `whois_check_availability` instead
+- Throws `domain_not_found` on an RDAP 404 (domain not registered) — use `whois_check_availability` to confirm
 
 ---
 
-### `whois_check_availability`
+### `whois_check_availability` <sub>tool</sub>
 
-Check whether a domain name is registered or available to register.
-
-- RDAP 404 = available (`available: true`) — exploits the RDAP spec's intended behavior
-- Returns `available: false` with `registrar` and `expiry_date` when registered
-- Returns `available: null` with `rdap_coverage: false` for TLDs without RDAP — cannot determine availability
-- Optimized for bulk name sweeps — thin response, no unnecessary fields
+- RDAP 404 response maps to `available: true`
+- Registered domains return `available: false` with `registrar` and `expiry_date`
+- `available: null` with `rdap_coverage: false` when the TLD has no RDAP coverage — availability cannot be determined
+- Thin response optimized for bulk name sweeps — no extra fields
 
 ---
 
-### `whois_get_dns`
+### `whois_get_dns` <sub>tool</sub>
 
-Fetch DNS records via DNS-over-HTTPS.
-
-- Cloudflare primary, NextDNS fallback (CAA records always use NextDNS — Cloudflare returns raw hex wire format for them)
-- Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR — multiple types in one call
-- Returns records with TTLs and the resolving source (`cloudflare` or `nextdns`)
-- `nxdomain: true` in result (not an error) when the domain doesn't exist in DNS
+- Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR; multiple types fetched in parallel; defaults to A, AAAA, MX, TXT, NS when `types` is omitted
+- Cloudflare primary, NextDNS fallback per type (CAA always uses NextDNS — Cloudflare returns raw hex wire format for it)
+- Returns records with TTLs and the resolving `source` (`cloudflare` or `nextdns`)
+- `nxdomain: true` in the result (not an error) when the domain doesn't exist in DNS
 
 ---
 
-### `whois_lookup_ip`
+### `whois_lookup_ip` <sub>tool</sub>
 
-Look up an IP address or CIDR block via RIR RDAP.
-
-- Auto-routes to the correct RIR (ARIN, RIPE, APNIC, LACNIC, AFRINIC) via IANA IP bootstrap
+- Accepts an IPv4/IPv6 address or CIDR block; auto-routes to the correct RIR (ARIN, RIPE, APNIC, LACNIC, AFRINIC) via IANA IP bootstrap
 - Returns netblock CIDR, org name, country, abuse contact email
 - Fetches PTR (reverse DNS) via DoH as a best-effort step — `ptr: null` on failure, not an error
-- Validates and rejects private/reserved ranges (RFC 1918, loopback, link-local) with a clear error
+- Throws `private_range` for RFC 1918, loopback, and link-local addresses — no RIR RDAP record exists for them
+- Throws `ip_not_found` on an RIR RDAP 404
 
 ---
 
-### `whois_lookup_asn`
-
-Resolve an ASN to its org name, country, and RIR.
+### `whois_lookup_asn` <sub>tool</sub>
 
 - Accepts `AS15169` or bare integer `15169` format
 - Routes to the correct RIR RDAP endpoint via IANA ASN bootstrap
-- Returns `name`, `org`, `country`, `rir`, `start_autnum`, `end_autnum`
+- Returns `name`, `org_name`, `country`, `rir`, `start_autnum`, `end_autnum`
+- Throws `asn_not_found` on an RIR RDAP 404
 
 ---
 
-### `whois_get_dossier`
-
-One-call domain triage aggregating registration and DNS data in parallel.
+### `whois_get_dossier` <sub>tool</sub>
 
 - Runs RDAP domain lookup and DoH (A, MX, NS, TXT) in parallel via `Promise.allSettled`
 - Inferred signals: `age_days`, `privacy_redacted`, `registrar`, `ns_provider` (from NS records), `mx_provider` (from MX records)
 - No synthesized risk scores — factual signals only; the agent decides the verdict
-- Partial results surfaced when one leg fails (`source_error` on the failed leg)
-- Both-legs-fail throws `ServiceUnavailable`; individual leg failures are data, not errors
+- Partial results surfaced when one leg fails (`rdap_source_error` / `dns_source_error` on the failed leg)
+- Throws `both_legs_failed` only when both RDAP and DNS fail; individual leg failures are data, not errors
 
 ---
 
 ## Features
 
-Built on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core):
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): stdio and Streamable HTTP transports, pluggable auth (`none` / `jwt` / `oauth`), swappable storage (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`), structured logging with optional OpenTelemetry tracing.
 
-- Declarative tool definitions — single file per tool, framework handles registration and validation
-- Unified error handling — handlers throw, framework catches, classifies, and formats
-- Pluggable auth: `none`, `jwt`, `oauth`
-- Swappable storage backends: `in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2/D1`
-- Structured logging with optional OpenTelemetry tracing
-- STDIO and Streamable HTTP transports
+RDAP / DNS-specific:
 
-Domain and network intelligence:
-
-- RDAP over HTTPS — no port-43 TCP dependency, runs on Node, Bun, and Cloudflare Workers
-- IANA bootstrap auto-selection — correct registry RDAP server picked per TLD, RIR, or ASN range; bootstrap JSON cached (TTL 24h) in tenant state
-- DNS-over-HTTPS via Cloudflare and NextDNS — resilient dual-provider with per-type routing (NextDNS for CAA; Cloudflare for all others)
+- RDAP over HTTPS — no port-43 TCP dependency
+- IANA bootstrap auto-selection — correct registry RDAP server picked per TLD, RIR, or ASN range; bootstrap JSON cached in-memory for 24h
+- DNS-over-HTTPS via Cloudflare and NextDNS — dual-provider with per-type routing (NextDNS for CAA; Cloudflare for all others) and automatic fallback
 - No API keys required — all sources (IANA, registry RDAP endpoints, RIR RDAP, Cloudflare DoH, NextDNS DoH) are public and keyless
 
 Agent-friendly output:
 
-- Explicit coverage signals — `rdap_coverage: false` tells the agent the TLD lacks RDAP rather than returning a confusing error
+- Coverage signaled two ways — `rdap_coverage: false` returned as data by `whois_check_availability` and `whois_get_dossier`, while `whois_lookup_domain` throws `rdap_no_coverage` for the same case
 - Privacy redaction surfaced as a field — `registrant_redacted: true` rather than silently absent contact data
-- Partial failure model — `whois_get_dossier` marks individual legs with `source_error` and continues; only both-legs-fail escalates to an error
-- Factual signals, not scores — `age_days`, `privacy_redacted`, `ns_provider`, `mx_provider` are real data; agents chain into threat-intel or risk servers for enrichment
+- Partial failure model — `whois_get_dossier` marks individual legs with a `source_error` field and continues; only both-legs-fail escalates to an error
+- Factual signals, not scores — `age_days`, `privacy_redacted`, `ns_provider`, `mx_provider` are real data, not synthesized risk scores
 
 ---
 
@@ -279,7 +268,8 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 
 | Path | Purpose |
 |:-----|:--------|
-| `src/index.ts` | `createApp()` entry point — registers tools and inits services. |
+| `src/index.ts` | Entry point — starts the app. |
+| `src/app.ts` | `createApp()` options — registers tools, inits services, declares the session mode. |
 | `src/config/` | Server-specific environment variable parsing and validation (Zod). |
 | `src/services/rdap/` | RDAP client — IANA bootstrap cache, domain/IP/ASN lookup, retry. |
 | `src/services/doh/` | DNS-over-HTTPS client — Cloudflare primary, NextDNS fallback. |
@@ -294,15 +284,15 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rules. The short version:
 
 - Handlers throw, framework catches — no `try/catch` in tool logic
-- Use `ctx.log` for request-scoped logging, `ctx.state` for tenant-scoped storage (IANA bootstrap cache)
-- Register new tools via `src/index.ts` tools array
+- Use `ctx.log` for request-scoped logging
+- Register new tools via `src/app.ts`'s `tools` array
 - Wrap external API calls: validate raw → normalize to domain type → return output schema; never fabricate missing fields
 
 ---
 
 ## Contributing
 
-Issues and pull requests are welcome. Run checks and tests before submitting:
+Issues are welcome. Run checks and tests before submitting:
 
 ```sh
 bun run devcheck
