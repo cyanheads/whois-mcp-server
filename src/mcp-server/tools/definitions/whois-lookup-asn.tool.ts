@@ -11,7 +11,7 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
   title: 'ASN Lookup',
   description:
     'Resolve an Autonomous System Number (ASN) to its org name, country, and RIR source via RIR RDAP. ' +
-    'Accepts AS-prefixed format (e.g., "AS15169") or bare integer (e.g., "15169"). Distinct from IP ' +
+    'Accepts a decimal ASN from 1 to 4294967295 (e.g., "AS15169" or "15169"). Distinct from IP ' +
     'lookup — the entry point is the ASN itself, not an IP within its block.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
@@ -19,8 +19,9 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
     asn: z
       .string()
       .describe(
-        'Autonomous System Number to look up. Accepts AS-prefixed format (e.g., "AS15169") or bare ' +
-          'integer (e.g., "15169").',
+        'Decimal ASN from 1 to 4294967295. Optional case-insensitive AS prefix and leading + ' +
+          '(e.g., "AS15169", "AS 15169", "+15169"). Outer whitespace and whitespace after AS are accepted; ' +
+          'whitespace inside digits or after + is invalid.',
       ),
   }),
 
@@ -48,8 +49,9 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
     {
       reason: 'invalid_asn',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Input does not match AS<number> or bare integer format.',
-      recovery: 'Provide a valid ASN like "AS15169" or "15169". Numbers must be positive integers.',
+      when: 'The complete token is not a decimal ASN from 1 to 4294967295.',
+      recovery:
+        'Provide a decimal integer from 1 to 4294967295, optionally prefixed with AS and +, such as "AS15169" or "+15169".',
       thrownBy: 'service',
     },
     {

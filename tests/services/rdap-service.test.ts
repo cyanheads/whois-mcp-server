@@ -7,7 +7,7 @@
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createFetchMock, createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { whoisLookupAsn } from '@/mcp-server/tools/definitions/whois-lookup-asn.tool.js';
 import { whoisLookupDomain } from '@/mcp-server/tools/definitions/whois-lookup-domain.tool.js';
 import { whoisLookupIp } from '@/mcp-server/tools/definitions/whois-lookup-ip.tool.js';
@@ -90,5 +90,32 @@ describe('RdapService RDAP 404 handling', () => {
     await expect(service.checkAvailability('available.com', ctx)).resolves.toEqual({
       available: true,
     });
+  });
+});
+
+describe('IP bootstrap prefix boundaries', () => {
+  let http: ReturnType<typeof createFetchMock>;
+  afterEach(() => http?.restore());
+
+  it.each([
+    ['8.8.8.8', false, '0.0.0.0/0', true],
+    ['8.8.8.8', false, '8.8.8.8/32', true],
+    ['8.8.8.9', false, '8.8.8.8/32', false],
+    ['2001:db8::1', true, '::/0', true],
+    ['2001:db8::1', true, '2001:db8::1/128', true],
+    ['2001:db8::2', true, '2001:db8::1/128', false],
+    ['2001:db8:1:ffff::1', true, '2001:db8:1::/48', true],
+    ['2001:db8:2::1', true, '2001:db8:1::/48', false],
+  ] as const)('routes %s against %s/%s', async (ip, ipv6, cidr, matches) => {
+    http = createFetchMock([
+      {
+        match: `https://data.iana.org/rdap/${ipv6 ? 'ipv6' : 'ipv4'}.json`,
+        respond: Response.json({ services: [[[cidr], [RDAP_BASE]]] }),
+      },
+    ]);
+    http.install();
+    expect(await new RdapService().findIpRdapServer(ip, ipv6, createMockContext())).toBe(
+      matches ? RDAP_BASE : null,
+    );
   });
 });

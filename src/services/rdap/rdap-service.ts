@@ -4,6 +4,7 @@
  * @module services/rdap/rdap-service
  */
 
+import { isIP } from 'node:net';
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import {
@@ -35,80 +36,54 @@ const IANA_ASN_BOOTSTRAP = 'https://data.iana.org/rdap/asn.json';
 
 const BOOTSTRAP_TTL_MS = 24 * 60 * 60 * 1000; // 24h
 
-// Private/reserved IPv4 ranges
-const PRIVATE_IPV4_RANGES = [
-  /^10\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^192\.168\./,
-  /^127\./,
-  /^169\.254\./,
-  /^100\.(6[4-9]|[7-9]\d|1([01]\d|2[0-7]))\./, // CGNAT 100.64-100.127
-  /^0\./,
-  /^255\./,
-];
+/** Parsed lookup address; mapped IPv6 resolves through its embedded IPv4 address. */
+type ParsedIp = { valid: true; base: string; value: bigint; isIpv6: boolean; hasCidr: boolean };
 
-// Private/reserved IPv6 ranges (string prefix checks)
-const PRIVATE_IPV6_PREFIXES = [
-  '::1', // loopback
-  'fc', // ULA fc00::/7
-  'fd', // ULA fd00::/7
-  'fe80', // link-local fe80::/10
-];
-
-function isPrivateIpv4(ip: string): boolean {
-  return PRIVATE_IPV4_RANGES.some((r) => r.test(ip));
-}
-
-function isPrivateIpv6(ip: string): boolean {
-  const lower = ip.toLowerCase();
-  return PRIVATE_IPV6_PREFIXES.some((p) => lower.startsWith(p));
-}
-
-/** Check if an IP or CIDR base is private/reserved. */
-function isPrivateIp(ip: string): boolean {
-  const base = ip.split('/')[0] ?? '';
-  if (base.includes(':')) return isPrivateIpv6(base);
-  return isPrivateIpv4(base);
-}
-
-/** Simple IPv4 validation */
-function isValidIpv4(ip: string): boolean {
-  const parts = ip.split('.');
-  if (parts.length !== 4) return false;
-  return parts.every((p) => {
-    const n = parseInt(p, 10);
-    return !Number.isNaN(n) && n >= 0 && n <= 255 && String(n) === p;
-  });
-}
-
-/** Simple IPv6 validation — accepts compressed forms */
-function isValidIpv6(ip: string): boolean {
-  if (!ip.includes(':')) return false;
-  if (ip.split(':').length > 8) return false;
-  return /^[0-9a-fA-F:]+$/.test(ip);
-}
-
-/** Validate an IP address or CIDR notation */
-export function validateIp(ip: string): { valid: boolean; isIpv6: boolean; hasCidr: boolean } {
-  const parts = ip.split('/');
-  const base = parts[0] ?? '';
-  const hasCidr = parts.length === 2;
-
-  if (hasCidr) {
-    const prefix = parseInt(parts[1] ?? '', 10);
-    if (Number.isNaN(prefix) || prefix < 0) return { valid: false, isIpv6: false, hasCidr: true };
+/** Parse a complete IP/CIDR token, retaining base-address lookup semantics. */
+export function validateIp(ip: string): ParsedIp | { valid: false } {
+  const [base = '', prefix, ...extra] = ip.split('/');
+  const family = isIP(base);
+  if (!family || base.includes('%') || extra.length > 0) return { valid: false };
+  if (
+    prefix !== undefined &&
+    (!/^\d+$/.test(prefix) || Number(prefix) > (family === 6 ? 128 : 32))
+  ) {
+    return { valid: false };
   }
+  const value = family === 6 ? ipv6ToBigInt(base) : ipv4ToBigInt(base);
+  const mapped = family === 6 && value >> 32n === 0xffffn;
+  const lookupValue = mapped ? value & 0xffffffffn : value;
+  const lookupBase = mapped
+    ? [24n, 16n, 8n, 0n].map((shift) => Number((lookupValue >> shift) & 255n)).join('.')
+    : base;
+  return {
+    valid: true,
+    base: lookupBase,
+    value: lookupValue,
+    isIpv6: family === 6 && !mapped,
+    hasCidr: prefix !== undefined,
+  };
+}
 
-  const isIpv6 = base.includes(':');
-  if (isIpv6) {
-    if (hasCidr && parseInt(parts[1] ?? '129', 10) > 128)
-      return { valid: false, isIpv6: true, hasCidr: true };
-    return { valid: isValidIpv6(base), isIpv6: true, hasCidr };
+/** Apply the server's explicit exclusions, not a blanket special-use policy. */
+function isPrivateIp(ip: ParsedIp): boolean {
+  if (ip.isIpv6) {
+    return ip.value === 1n || ip.value >> 121n === 0x7en || ip.value >> 118n === 0x3fan;
   }
+  const first = Number(ip.value >> 24n);
+  const second = Number((ip.value >> 16n) & 255n);
+  return (
+    [0, 10, 127, 255].includes(first) ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
 
-  if (hasCidr && parseInt(parts[1] ?? '33', 10) > 32)
-    return { valid: false, isIpv6: false, hasCidr: true };
-  return { valid: isValidIpv4(base), isIpv6: false, hasCidr };
+/** Convert a validated IPv4 address to its numeric value. */
+function ipv4ToBigInt(ip: string): bigint {
+  return ip.split('.').reduce((value, octet) => (value << 8n) | BigInt(octet), 0n);
 }
 
 /** Build reverse PTR query name from an IPv4 address */
@@ -118,6 +93,11 @@ export function ipv4ToPtr(ip: string): string {
 
 /** Expand a compressed IPv6 address to a full 128-bit BigInt */
 function ipv6ToBigInt(ip: string): bigint {
+  if (ip.includes('.')) {
+    const lastColon = ip.lastIndexOf(':');
+    const tail = ipv4ToBigInt(ip.slice(lastColon + 1));
+    ip = `${ip.slice(0, lastColon + 1)}${(tail >> 16n).toString(16)}:${(tail & 0xffffn).toString(16)}`;
+  }
   let groups: string[];
   if (ip.includes('::')) {
     const parts = ip.split('::');
@@ -133,21 +113,7 @@ function ipv6ToBigInt(ip: string): bigint {
 
 /** Build reverse PTR query name from an IPv6 address */
 export function ipv6ToPtr(ip: string): string {
-  let hex: string;
-  // Handle :: compression
-  if (ip.includes('::')) {
-    const parts = ip.split('::');
-    const left = parts[0] ? parts[0].split(':') : [];
-    const right = parts[1] ? parts[1].split(':') : [];
-    const missing = 8 - left.length - right.length;
-    const full = [...left, ...Array(missing).fill('0'), ...right];
-    hex = full.map((g) => g.padStart(4, '0')).join('');
-  } else {
-    hex = ip
-      .split(':')
-      .map((g) => g.padStart(4, '0'))
-      .join('');
-  }
+  const hex = ipv6ToBigInt(ip).toString(16).padStart(32, '0');
   return `${hex.split('').reverse().join('.')}.ip6.arpa`;
 }
 
@@ -165,12 +131,13 @@ function extractTwoLabelSuffix(domain: string): string {
 }
 
 /** Identify RIR from an RDAP self-link URL */
-function ririFromSelfLink(selfLink: string): string | undefined {
-  if (selfLink.includes('arin.net')) return 'ARIN';
-  if (selfLink.includes('ripe.net')) return 'RIPE';
-  if (selfLink.includes('apnic.net')) return 'APNIC';
-  if (selfLink.includes('lacnic.net')) return 'LACNIC';
-  if (selfLink.includes('afrinic.net')) return 'AFRINIC';
+function rirFromSelfLink(selfLink: string): string | undefined {
+  const url = URL.parse(selfLink);
+  if (!url) return;
+  const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
+  for (const rir of ['arin', 'ripe', 'apnic', 'lacnic', 'afrinic']) {
+    if (hostname === `${rir}.net` || hostname.endsWith(`.${rir}.net`)) return rir.toUpperCase();
+  }
   return;
 }
 
@@ -283,7 +250,7 @@ function normalizeIpNetwork(raw: RdapIpNetworkRaw, ip: string): NormalizedIpNetw
   }
 
   const selfLink = raw.links?.find((l) => l.rel === 'self')?.href ?? '';
-  const rdapSource = ririFromSelfLink(selfLink);
+  const rdapSource = rirFromSelfLink(selfLink);
 
   const result: NormalizedIpNetwork = { ip, ptr: null };
 
@@ -309,7 +276,7 @@ function normalizeAutnum(raw: RdapAutnumRaw, asn: string): NormalizedAsn {
   const orgName = registrant ? entityName(registrant) : undefined;
 
   const selfLink = raw.links?.find((l) => l.rel === 'self')?.href ?? '';
-  const rir = ririFromSelfLink(selfLink);
+  const rir = rirFromSelfLink(selfLink);
 
   const result: NormalizedAsn = { asn };
 
@@ -409,7 +376,7 @@ export class RdapService {
         const netParts = net.split('.').map(Number);
 
         if (netParts.length !== 4 || parts.length !== 4) continue;
-        const mask = ~((1 << (32 - prefixLen)) - 1);
+        const mask = prefixLen === 0 ? 0 : ~((1 << (32 - prefixLen)) - 1);
         const [n0, n1, n2, n3] = netParts as [number, number, number, number];
         const [p0, p1, p2, p3] = parts as [number, number, number, number];
         const netNum = (n0 << 24) | (n1 << 16) | (n2 << 8) | n3;
@@ -547,26 +514,24 @@ export class RdapService {
 
   /** Look up an IP address or CIDR via RIR RDAP */
   async lookupIp(ip: string, ctx: Context): Promise<NormalizedIpNetwork> {
-    const { valid, isIpv6 } = validateIp(ip);
-    if (!valid) {
+    const parsed = validateIp(ip);
+    if (!parsed.valid) {
       throw validationError(`"${ip}" is not a valid IPv4, IPv6, or CIDR address.`, {
         reason: 'invalid_ip',
-        ...ctx.recoveryFor('invalid_ip'),
       });
     }
 
-    const base = ip.split('/')[0] ?? '';
-    if (isPrivateIp(base)) {
+    const { base, isIpv6 } = parsed;
+    if (isPrivateIp(parsed)) {
       throw validationError(
-        `"${base}" is a private or reserved IP address — no RIR RDAP record exists for it.`,
+        `"${base}" is in an address range excluded by this server's lookup policy.`,
         {
           reason: 'private_range',
-          ...ctx.recoveryFor('private_range'),
         },
       );
     }
 
-    const rdapServer = await this.findIpRdapServer(ip, isIpv6, ctx);
+    const rdapServer = await this.findIpRdapServer(base, isIpv6, ctx);
     if (!rdapServer) {
       throw serviceUnavailable('No RIR RDAP server found for this IP address range.', { ip });
     }
@@ -612,14 +577,14 @@ export class RdapService {
 
   /** Look up an ASN via RIR RDAP */
   async lookupAsn(asn: string, ctx: Context): Promise<NormalizedAsn> {
-    const asnClean = asn.toUpperCase().replace(/^AS/, '');
-    const asnNum = parseInt(asnClean, 10);
-    if (Number.isNaN(asnNum) || asnNum <= 0) {
+    const token = asn.trim();
+    const match = /^(?:AS\s*)?\+?(\d+)$/i.exec(token);
+    const asnNum = match ? Number(match[1]) : NaN;
+    if (!Number.isInteger(asnNum) || asnNum < 1 || asnNum > 4294967295) {
       throw validationError(
-        `"${asn}" is not a valid ASN. Expected AS<number> or bare integer (e.g., AS15169 or 15169).`,
+        `"${asn}" is not a valid ASN. Expected a decimal integer from 1 to 4294967295, optionally prefixed with AS and a leading + (e.g., AS15169 or +15169).`,
         {
           reason: 'invalid_asn',
-          ...ctx.recoveryFor('invalid_asn'),
         },
       );
     }

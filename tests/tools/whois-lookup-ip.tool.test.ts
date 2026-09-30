@@ -10,24 +10,14 @@ import type { NormalizedIpNetwork } from '@/services/rdap/types.js';
 
 // --- service mocks ----------------------------------------------------------
 
-vi.mock('@/services/rdap/rdap-service.js', () => {
+vi.mock('@/services/rdap/rdap-service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/rdap/rdap-service.js')>();
   const mockService = {
     lookupIp: vi.fn(),
   };
   return {
+    ...actual,
     getRdapService: () => mockService,
-    // Also re-export the real pure utilities used by the handler
-    validateIp: (ip: string) => {
-      const parts = ip.split('/');
-      const base = parts[0] ?? '';
-      const hasCidr = parts.length === 2;
-      const isIpv6 = base.includes(':');
-      // Very simplified: just check for dots for IPv4 and colons for IPv6
-      const valid = isIpv6 ? base.includes(':') : /^\d{1,3}(\.\d{1,3}){3}$/.test(base);
-      return { valid, isIpv6, hasCidr };
-    },
-    ipv4ToPtr: (ip: string) => `${ip.split('.').reverse().join('.')}.in-addr.arpa`,
-    ipv6ToPtr: (_ip: string) => 'reversed.ip6.arpa',
     __mockService: mockService,
   };
 });

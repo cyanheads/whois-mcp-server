@@ -13,8 +13,9 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
   description:
     'Look up an IP address or CIDR block via RIR RDAP (ARIN, RIPE, APNIC, LACNIC, AFRINIC — auto-routed ' +
     'via IANA bootstrap). Returns netblock, org, country, CIDR, abuse contact email, and reverse DNS (PTR) ' +
-    'via DoH. PTR is best-effort — failure returns ptr: null. Private/reserved ranges (RFC 1918, loopback, ' +
-    'link-local) return a validation error — no RIR RDAP record exists for them.',
+    'via DoH. PTR is best-effort — failure returns ptr: null. The base address is queried for CIDR input. ' +
+    'The server excludes IPv4 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.168/16, 255/8 ' +
+    'and IPv6 ::1/128, fc00::/7, fe80::/10. Other special-use addresses remain eligible for lookup.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
@@ -22,7 +23,8 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
       .string()
       .describe(
         'IPv4 address (e.g., "8.8.8.8"), IPv6 address (e.g., "2001:4860:4860::8888"), or CIDR notation ' +
-          '(e.g., "192.0.2.0/24"). Private/reserved ranges will return a validation error.',
+          '(e.g., "192.0.2.0/24"). One decimal prefix in 0–32 (IPv4) or 0–128 (IPv6); no whitespace, ' +
+          'zone IDs, or brackets. IPv4-mapped IPv6 uses its embedded IPv4 for lookup and PTR.',
       ),
   }),
 
@@ -64,9 +66,8 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
     {
       reason: 'private_range',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Input is a private or reserved range — no RIR RDAP record exists for it.',
-      recovery:
-        'Use a public, globally-routable IP address. RFC 1918, loopback, and link-local addresses have no RIR records.',
+      when: 'The numeric address falls within the server’s explicit excluded ranges.',
+      recovery: 'Choose an address outside the excluded ranges listed in this tool’s description.',
       thrownBy: 'service',
     },
     {
@@ -80,11 +81,9 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
   ],
 
   async handler(input, ctx) {
-    const { valid } = validateIp(input.ip);
-    if (!valid) {
-      throw ctx.fail('invalid_ip', `"${input.ip}" is not a valid IPv4, IPv6, or CIDR address.`, {
-        ...ctx.recoveryFor('invalid_ip'),
-      });
+    const parsed = validateIp(input.ip);
+    if (!parsed.valid) {
+      throw ctx.fail('invalid_ip', `"${input.ip}" is not a valid IPv4, IPv6, or CIDR address.`);
     }
 
     ctx.log.info('RDAP IP lookup', { ip: input.ip });
@@ -93,8 +92,7 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
     const network = await getRdapService().lookupIp(input.ip, ctx);
 
     // PTR lookup — best-effort, failure = null
-    const base = input.ip.split('/')[0] ?? '';
-    const isIpv6 = base.includes(':');
+    const { base, isIpv6 } = parsed;
     const ptrName = isIpv6 ? ipv6ToPtr(base) : ipv4ToPtr(base);
     const ptr = await getDohService().ptrLookup(ptrName, ctx);
 

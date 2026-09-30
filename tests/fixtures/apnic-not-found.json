@@ -1,0 +1,30 @@
+{
+  "description": [],
+  "errorCode": 404,
+  "title": "Not Found",
+  "notices": [
+    {
+      "description": ["This is the APNIC RDAP query service. The objects are in RDAP format."],
+      "links": [
+        {
+          "href": "http://www.apnic.net/db/dbcopyright.html",
+          "rel": "terms-of-service",
+          "type": "text/html"
+        }
+      ],
+      "title": "Terms and Conditions"
+    },
+    {
+      "description": ["If you see inaccuracies in the results, please visit: "],
+      "links": [
+        {
+          "href": "https://www.apnic.net/manage-ip/using-whois/abuse-and-spamming/invalid-contact-form",
+          "rel": "inaccuracy-report",
+          "type": "text/html"
+        }
+      ],
+      "title": "Whois Inaccuracy Reporting"
+    }
+  ],
+  "rdapConformance": ["rdap_level_0"]
+}
