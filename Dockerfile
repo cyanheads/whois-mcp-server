@@ -4,7 +4,7 @@
 # This stage installs all dependencies (including dev), builds the TypeScript
 # source code into JavaScript, and prepares the production assets.
 # ==============================================================================
-FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2 AS build
 
 WORKDIR /usr/src/app
 
@@ -24,13 +24,52 @@ RUN bun run build
 
 
 # ==============================================================================
+# Production Dependencies Stage
+#
+# Run the scanner and OTel installer natively, cross-installing dependencies for
+# the target architecture. Only node_modules enters the production image.
+# ==============================================================================
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2 AS deps
+
+WORKDIR /usr/src/app
+
+COPY package.json bun.lock bunfig.toml ./
+
+# Seed the scanner omitted by the production install; bunfig.toml retains both
+# the scanner and release-age protections for all dependency resolution.
+COPY --from=build /usr/src/app/node_modules/@socketsecurity/bun-security-scanner ./node_modules/@socketsecurity/bun-security-scanner
+
+ARG TARGETOS
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) echo x64 ;; \
+      arm64) echo arm64 ;; \
+      *) echo "Unsupported TARGETARCH '$TARGETARCH': expected amd64 or arm64" >&2; exit 1 ;; \
+    esac > .bun-cpu
+
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    bun install --production --omit=peer --frozen-lockfile --ignore-scripts \
+      --os="$TARGETOS" --cpu="$(cat .bun-cpu)"
+
+# Read the OTel package list and ranges from the installed framework.
+COPY scripts/install-otel.ts ./scripts/
+ARG OTEL_ENABLED=true
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+    if [ "$OTEL_ENABLED" = "true" ]; then \
+      bun scripts/install-otel.ts --os="$TARGETOS" --cpu="$(cat .bun-cpu)"; \
+    fi
+
+RUN rm -rf node_modules/@socketsecurity/bun-security-scanner
+
+
+# ==============================================================================
 # Production Stage
 #
 # This stage creates a minimal, optimized, and secure image for running the
 # application. It uses a slim base image and only includes production
 # dependencies and build artifacts.
 # ==============================================================================
-FROM oven/bun:1.4.0-slim AS production
+FROM oven/bun:1.4.2-slim AS production
 
 WORKDIR /usr/src/app
 
@@ -46,36 +85,9 @@ LABEL org.opencontainers.image.source="https://github.com/cyanheads/whois-mcp-se
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.version="${APP_VERSION}"
 
-# Copy dependency manifests
-COPY package.json bun.lock ./
-
-# Install only production dependencies, ignoring any lifecycle scripts (like 'prepare')
-# that are not needed in the final production image.
-# `--omit=peer` drops the framework's optional peer tiers (test runner, service
-# SDKs, parsers) that Bun would otherwise auto-install. Anything this server
-# actually imports belongs in its own `dependencies`, so nothing needed at
-# runtime is lost. The OTEL step below carries the same flag — without it, that
-# install re-resolves the graph and pulls every optional peer back in.
-RUN --mount=type=cache,target=/root/.bun/install/cache \
-    bun install --production --omit=peer --frozen-lockfile --ignore-scripts
-
-# Conditionally install OpenTelemetry optional peer dependencies (Tier 3).
-# These are not bundled by default to keep the base image lean. Enable at build time
-# with: docker build --build-arg OTEL_ENABLED=true
-ARG OTEL_ENABLED=true
-RUN --mount=type=cache,target=/root/.bun/install/cache \
-    if [ "$OTEL_ENABLED" = "true" ]; then \
-      bun add --omit=dev --omit=peer --ignore-scripts @hono/otel \
-        @opentelemetry/instrumentation-http \
-        @opentelemetry/exporter-metrics-otlp-http \
-        @opentelemetry/exporter-trace-otlp-http \
-        @opentelemetry/instrumentation-pino \
-        @opentelemetry/resources \
-        @opentelemetry/sdk-metrics \
-        @opentelemetry/sdk-node \
-        @opentelemetry/sdk-trace-node \
-        @opentelemetry/semantic-conventions; \
-    fi
+# Keep the original manifest; the deps-stage OTel install rewrites its copy.
+COPY package.json ./
+COPY --from=deps /usr/src/app/node_modules ./node_modules
 
 # Copy the compiled application code from the build stage
 COPY --from=build /usr/src/app/dist ./dist
@@ -101,7 +113,6 @@ ENV MCP_TRANSPORT_TYPE="http"
 ENV MCP_SESSION_MODE="stateless"
 ENV MCP_LOG_LEVEL="info"
 ENV LOGS_DIR="/var/log/whois-mcp-server"
-ENV MCP_FORCE_CONSOLE_LOGGING="true"
 
 # Expose the port the server listens on
 EXPOSE ${MCP_HTTP_PORT}
