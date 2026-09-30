@@ -52,6 +52,7 @@ export interface NormalizedDnsRecord {
 export interface DnsLookupResult {
   domain: string;
   nxdomain: boolean;
+  query_sources: Array<{ type: DnsRecordType; source: 'cloudflare' | 'nextdns' }>;
   records: NormalizedDnsRecord[];
   source: 'cloudflare' | 'nextdns';
 }

@@ -28,6 +28,7 @@ async function getDohMock() {
 // --- fixtures ---------------------------------------------------------------
 
 const noRecordResult: DnsLookupResult = {
+  query_sources: [{ type: 'A', source: 'cloudflare' }],
   domain: 'example.com',
   nxdomain: false,
   records: [],
@@ -36,6 +37,7 @@ const noRecordResult: DnsLookupResult = {
 
 // CRITICAL: NXDOMAIN is DATA not an error — nxdomain: true in result, not thrown
 const nxdomainResult: DnsLookupResult = {
+  query_sources: [{ type: 'A', source: 'cloudflare' }],
   domain: 'does-not-exist-in-dns.example',
   nxdomain: true,
   records: [],
@@ -43,6 +45,10 @@ const nxdomainResult: DnsLookupResult = {
 };
 
 const dnsWithRecords: DnsLookupResult = {
+  query_sources: (['A', 'MX', 'NS', 'TXT'] as const).map((type) => ({
+    type,
+    source: 'cloudflare',
+  })),
   domain: 'example.com',
   nxdomain: false,
   records: [
@@ -139,6 +145,7 @@ describe('whoisGetDns', () => {
 
   it('handles sparse upstream payload — no Answer records', () => {
     const sparse: DnsLookupResult = {
+      query_sources: [{ type: 'A', source: 'cloudflare' }],
       domain: 'sparse.com',
       nxdomain: false,
       records: [],
@@ -153,6 +160,7 @@ describe('whoisGetDns', () => {
 
   it('formats output with nextdns source correctly', () => {
     const nextdnsResult: DnsLookupResult = {
+      query_sources: [{ type: 'CAA', source: 'nextdns' }],
       domain: 'example.com',
       nxdomain: false,
       records: [

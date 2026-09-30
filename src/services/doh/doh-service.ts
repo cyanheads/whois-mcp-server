@@ -62,15 +62,11 @@ export class DohService {
     const config = getServerConfig();
     const records: NormalizedDnsRecord[] = [];
     let nxdomain = false;
-    // Track actual resolvers used: cloudflare = at least one non-CAA type used Cloudflare primary;
-    // nextdns = all types used NextDNS (either CAA-primary or Cloudflare-fallback)
-    let usedCloudflare = false;
-
-    await Promise.all(
-      types.map(async (type) => {
+    const querySources = await Promise.all(
+      [...new Set(types)].map(async (type) => {
         // CAA always via NextDNS; everything else Cloudflare first
         const primaryUrl = type === 'CAA' ? NEXTDNS_DOH : CLOUDFLARE_DOH;
-        const primarySource: 'cloudflare' | 'nextdns' = type === 'CAA' ? 'nextdns' : 'cloudflare';
+        let source: 'cloudflare' | 'nextdns' = type === 'CAA' ? 'nextdns' : 'cloudflare';
 
         let resp: DohResponse;
         try {
@@ -80,10 +76,8 @@ export class DohService {
             primaryUrl,
             config.dohTimeoutMs,
             ctx,
-            primarySource,
+            source,
           );
-          // Only count as cloudflare when we successfully used Cloudflare (not CAA)
-          if (type !== 'CAA') usedCloudflare = true;
         } catch {
           // Fallback to NextDNS for non-CAA types
           resp = await this.fetchSingleType(
@@ -94,12 +88,13 @@ export class DohService {
             ctx,
             'nextdns',
           );
+          source = 'nextdns';
         }
 
         if (resp.Status === 3) {
           // NXDOMAIN — domain does not exist in DNS
           nxdomain = true;
-          return;
+          return { type, source };
         }
 
         for (const answer of resp.Answer ?? []) {
@@ -112,11 +107,14 @@ export class DohService {
             data: answer.data,
           });
         }
+        return { type, source };
       }),
     );
 
-    const source: 'cloudflare' | 'nextdns' = usedCloudflare ? 'cloudflare' : 'nextdns';
-    return { domain, nxdomain, records, source };
+    const source = querySources.some((query) => query.source === 'cloudflare')
+      ? 'cloudflare'
+      : 'nextdns';
+    return { domain, nxdomain, records, source, query_sources: querySources };
   }
 
   /**

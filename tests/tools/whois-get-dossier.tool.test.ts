@@ -49,6 +49,10 @@ const rdapRecord: NormalizedDomain = {
 };
 
 const dnsResult: DnsLookupResult = {
+  query_sources: (['A', 'MX', 'NS', 'TXT'] as const).map((type) => ({
+    type,
+    source: 'cloudflare',
+  })),
   domain: 'github.com',
   nxdomain: false,
   records: [
@@ -61,6 +65,10 @@ const dnsResult: DnsLookupResult = {
 };
 
 const nxdomainDnsResult: DnsLookupResult = {
+  query_sources: (['A', 'MX', 'NS', 'TXT'] as const).map((type) => ({
+    type,
+    source: 'cloudflare',
+  })),
   domain: 'nonexistent.example.com',
   nxdomain: true,
   records: [],
@@ -211,8 +219,7 @@ describe('whoisGetDossier', () => {
     expect(result.a_records).toContain('140.82.114.4');
   });
 
-  // CRITICAL: domain_not_found + DNS failure → both_legs_failed (no data from either leg)
-  it('throws both_legs_failed when RDAP domain_not_found and DNS leg also fails', async () => {
+  it('returns registration absence when RDAP domain_not_found and DNS leg fails', async () => {
     const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
     const notFoundErr = new McpError(JsonRpcErrorCode.NotFound, 'Domain not registered', {
       reason: 'domain_not_found',
@@ -223,10 +230,7 @@ describe('whoisGetDossier', () => {
     const ctx = createMockContext({ errors: whoisGetDossier.errors });
     const input = whoisGetDossier.input.parse({ domain: 'missing.com' });
 
-    // domain_not_found alone is not enough — if DNS also fails, we have no data at all
-    // Per design: both legs must fail (and domain_not_found IS data) → should NOT throw
-    // Actually: domain_not_found + DNS failure → we have `registered: false` as data
-    // so the result is a partial success, not both_legs_failed
+    // Registration absence is still data when DNS fails.
     const result = await whoisGetDossier.handler(input, ctx);
     expect(result.registered).toBe(false);
     expect(result.rdap_coverage).toBe(true);
@@ -235,6 +239,7 @@ describe('whoisGetDossier', () => {
 
   it('infers Cloudflare as NS provider from cloudflare NS records', async () => {
     const cloudflareNs: DnsLookupResult = {
+      query_sources: [{ type: 'NS', source: 'cloudflare' }],
       domain: 'cloudflare.com',
       nxdomain: false,
       records: [{ type: 'NS', name: 'cloudflare.com', ttl: 3600, data: 'ns1.cloudflare.com.' }],

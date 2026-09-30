@@ -6,7 +6,6 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getDohService } from '@/services/doh/doh-service.js';
-import type { DnsRecordType } from '@/services/doh/types.js';
 import { isValidFqdn } from './_fqdn.js';
 
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME', 'SOA', 'CAA', 'PTR'] as const;
@@ -27,9 +26,10 @@ export const whoisGetDns = tool('whois_get_dns', {
       ),
     types: z
       .array(z.enum(DNS_RECORD_TYPES).describe('A DNS record type to fetch.'))
+      .min(1)
       .default(['A', 'AAAA', 'MX', 'TXT', 'NS'])
       .describe(
-        'DNS record types to fetch. Defaults to [A, AAAA, MX, TXT, NS]. ' +
+        'Nonempty list of DNS record types to fetch; duplicates are queried once. Defaults to [A, AAAA, MX, TXT, NS]. ' +
           'Specify more types to expand coverage (e.g., add CAA to check certificate authority authorization).',
       ),
   }),
@@ -57,8 +57,25 @@ export const whoisGetDns = tool('whois_get_dns', {
     source: z
       .enum(['cloudflare', 'nextdns'])
       .describe(
-        'The DoH resolver that provided results (cloudflare = primary used for most types, nextdns = fallback or CAA).',
+        'Aggregate resolver indicator: cloudflare when any query consumed a successful Cloudflare response; ' +
+          'otherwise nextdns. See query_sources for each requested type.',
       ),
+    query_sources: z
+      .array(
+        z
+          .object({
+            type: z
+              .enum(DNS_RECORD_TYPES)
+              .describe('Requested DNS record type, which may differ from an answer type.'),
+            source: z
+              .enum(['cloudflare', 'nextdns'])
+              .describe(
+                'Resolver whose successful response was consumed, including empty answers and NXDOMAIN.',
+              ),
+          })
+          .describe('Resolver attribution for one requested type.'),
+      )
+      .describe('One entry per unique requested type, in first-requested order.'),
   }),
 
   errors: [
@@ -73,27 +90,23 @@ export const whoisGetDns = tool('whois_get_dns', {
 
   async handler(input, ctx) {
     if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`, {
-        ...ctx.recoveryFor('invalid_domain'),
-      });
+      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
     }
 
     ctx.log.info('DNS lookup via DoH', { domain: input.domain, types: input.types });
 
-    const result = await getDohService().lookup(input.domain, input.types as DnsRecordType[], ctx);
-
-    return {
-      domain: result.domain,
-      nxdomain: result.nxdomain,
-      records: result.records,
-      source: result.source,
-    };
+    return await getDohService().lookup(input.domain, input.types, ctx);
   },
 
   format: (result) => {
     const lines: string[] = [];
     lines.push(`# DNS Records: ${result.domain}`);
-    lines.push(`**Source:** ${result.source}`);
+    lines.push(
+      `**Source (aggregate):** ${result.source} — ${result.source === 'cloudflare' ? 'at least one query used Cloudflare' : 'all queries used NextDNS'}`,
+    );
+    lines.push(
+      `**Query sources:** ${result.query_sources.map((query) => `${query.type}: ${query.source}`).join(', ')}`,
+    );
     lines.push(
       `**NXDOMAIN:** ${result.nxdomain === true ? 'Yes — domain does not exist in DNS' : 'No'}`,
     );
@@ -109,7 +122,7 @@ export const whoisGetDns = tool('whois_get_dns', {
     for (const [type, recs] of byType) {
       lines.push(`\n## ${type}`);
       for (const rec of recs) {
-        // TXT records are attacker-controlled free-text and must be fenced to prevent prompt injection
+        // Backticks distinguish TXT data visually; they are not a security boundary.
         const data = type === 'TXT' ? `\`${rec.data}\`` : rec.data;
         lines.push(`- **${data}** | name: ${rec.name} | TTL: ${rec.ttl}s`);
       }
