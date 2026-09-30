@@ -1,6 +1,6 @@
 # whois-mcp-server - Directory Structure
 
-Generated on: 2026-09-20 20:39:08
+Generated on: 2026-09-30 09:37:59
 
 ```text
 whois-mcp-server/
@@ -127,6 +127,7 @@ whois-mcp-server/
 │   ├── clean-mcpb.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
+│   ├── install-otel.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
@@ -159,11 +160,24 @@ whois-mcp-server/
 │   ├── app.ts
 │   └── index.ts
 ├── tests/
+│   ├── fixtures/
+│   │   ├── apnic-not-found.json
+│   │   ├── arin-test-net.json
+│   │   ├── iana-ipv4.json
+│   │   ├── iana-ipv6.json
+│   │   └── README.md
+│   ├── helpers/
+│   │   └── upstream.ts
 │   ├── prompts/
 │   ├── resources/
 │   ├── services/
+│   │   ├── doh-service.test.ts
 │   │   └── rdap-service.test.ts
 │   ├── tools/
+│   │   ├── dossier-contracts.test.ts
+│   │   ├── framework-adoption.test.ts
+│   │   ├── lookup-contracts.test.ts
+│   │   ├── rdap-captures.test.ts
 │   │   ├── whois-check-availability.tool.test.ts
 │   │   ├── whois-get-dns.tool.test.ts
 │   │   ├── whois-get-dossier.tool.test.ts
