@@ -6,11 +6,11 @@
 
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
-| `whois_lookup_domain` | Look up a domain's registration record — registrar, created/expiry dates, nameservers, EPP status codes, DNSSEC flag, and registrant org (where not privacy-redacted). RDAP-first via IANA auto-bootstrap. One normalized shape regardless of TLD. When the TLD has no RDAP coverage, returns `rdap_coverage: false`. | `domain: string` (valid FQDN) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
+| `whois_lookup_domain` | Look up a domain's registration record — registrar, created/expiry dates, nameservers, EPP status codes, DNSSEC flag, and registrant org (where not privacy-redacted). RDAP-first via IANA auto-bootstrap. One normalized shape regardless of TLD. When the TLD has no RDAP coverage, throws `rdap_no_coverage`. | `domain: string` (valid FQDN) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
 | `whois_check_availability` | Check whether a domain name is registered or available for registration. RDAP 404 = available (modeled as data: `available: true`, not an error). Returns `available: false` with `registrar` and `expiry_date` when registered. When the TLD has no RDAP coverage, returns `available: null` with `rdap_coverage: false` — cannot determine availability. Designed for "can I register X" and bulk name sweeps. | `domain: string` (valid FQDN) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
 | `whois_get_dns` | Fetch DNS records for a domain via DNS-over-HTTPS (Cloudflare 1.1.1.1 primary, Google 8.8.8.8 fallback). Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR. Returns records with TTLs and the resolving source. NXDOMAIN is returned as `nxdomain: true` in the result, not as an error. | `domain: string` (valid FQDN), `types: z.enum(["A","AAAA","MX","TXT","NS","CNAME","SOA","CAA","PTR"])[]` (default: `["A","AAAA","MX","TXT","NS"]`) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
-| `whois_lookup_ip` | Look up an IP address or CIDR block via RIR RDAP (ARIN/RIPE/APNIC/LACNIC/AFRINIC, auto-routed via IANA bootstrap). Returns netblock, org, country, CIDR, abuse contact email, and reverse DNS (PTR) via DoH. Private/reserved ranges (RFC 1918, loopback, link-local) return a validation error — no RDAP record exists for them. | `ip: string` (valid IPv4, IPv6, or CIDR notation) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
-| `whois_lookup_asn` | Resolve an ASN (e.g., `AS15169` or `15169`) to its org name, country, and RIR source via RIR RDAP. Distinct from IP lookup — entry point is the ASN itself, not an IP within the block. | `asn: string` (format: `AS<number>` or bare integer, e.g., `AS15169` or `15169`) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
+| `whois_lookup_ip` | Look up an IP/CIDR base address via RIR RDAP. Returns netblock, org, country, CIDR, abuse contact, and best-effort PTR. Explicit excluded ranges return `private_range`; other special-use addresses remain eligible for RDAP. IPv4-mapped IPv6 uses the embedded IPv4 for policy, routing, and PTR; other IPv6 uses 32 reversed nibbles. | `ip: string` (complete IPv4/IPv6; optional single decimal CIDR prefix within 0–32/0–128; no whitespace, zone IDs, or brackets) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
+| `whois_lookup_asn` | Resolve an ASN to org, country, and RIR. Validate the whole trimmed decimal token in 1–4294967295 before lookup. | `asn: string` (optional case-insensitive `AS` prefix, whitespace after `AS`, and leading `+`; no whitespace inside digits or after `+`) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
 | `whois_get_dossier` | One-call domain triage: registration + DNS (A, MX, NS, TXT) in parallel, normalized into a single record with factual signals — domain age in days, privacy-redacted flag, registrar name, NS provider inferred from NS records, mail provider inferred from MX. No synthesized scores. Partial results surfaced when one leg fails (registration or DNS marked with `source_error`); both-legs-fail throws `ServiceUnavailable`. | `domain: string` (valid FQDN) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
 
 ### Resources
@@ -98,22 +98,21 @@ Typed error contracts for each tool's known domain failure modes. Baseline codes
 |:-------|:-----|:-----|
 | `rdap_no_coverage` | `NotFound` | TLD has no RDAP server in IANA bootstrap — cannot perform lookup |
 | `domain_not_found` | `NotFound` | RDAP server returned 404 — domain not registered (may want `whois_check_availability` instead) |
-| `invalid_domain` | `InvalidParams` | Input is not a valid FQDN |
+| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
 
 ### `whois_check_availability`
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `rdap_no_coverage` | `NotFound` | TLD has no RDAP server — `available` is `null`, cannot determine registration status |
-| `invalid_domain` | `InvalidParams` | Input is not a valid FQDN |
+| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
 
-Note: RDAP 404 is **not** an error for this tool — it is the primary availability signal (`available: true`).
+Note: RDAP 404 is **not** an error for this tool — it is the primary availability signal (`available: true`). Missing RDAP coverage returns `available: null` with `rdap_coverage: false`, also as data.
 
 ### `whois_get_dns`
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `invalid_domain` | `InvalidParams` | Input is not a valid FQDN |
+| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
 
 Note: NXDOMAIN (`Status: 3`) is **not** an error — returned as `nxdomain: true` in the result.
 
@@ -121,22 +120,22 @@ Note: NXDOMAIN (`Status: 3`) is **not** an error — returned as `nxdomain: true
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `invalid_ip` | `InvalidParams` | Input is not a valid IPv4, IPv6, or CIDR address |
-| `private_range` | `InvalidParams` | Input is a private/reserved range (RFC 1918, loopback, link-local) — no RIR RDAP record exists |
+| `invalid_ip` | `ValidationError` | Input is not a complete valid IPv4, IPv6, or CIDR token |
+| `private_range` | `ValidationError` | The numeric address falls within the explicit exclusion policy below |
 | `ip_not_found` | `NotFound` | RIR RDAP returned 404 — no netblock record for this address |
 
 ### `whois_lookup_asn`
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `invalid_asn` | `InvalidParams` | Input does not match `AS<number>` or bare integer format |
+| `invalid_asn` | `ValidationError` | The whole trimmed token is not a decimal ASN in 1–4294967295 with the supported optional prefix/sign |
 | `asn_not_found` | `NotFound` | RDAP returned 404 — ASN not found in any RIR |
 
 ### `whois_get_dossier`
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `invalid_domain` | `InvalidParams` | Input is not a valid FQDN |
+| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
 | `both_legs_failed` | `ServiceUnavailable` | Both RDAP and DoH legs failed — no data returned |
 
 Note: single-leg failures are partial results (`source_error` on the failed leg), not thrown errors.
@@ -183,6 +182,12 @@ PTR is best-effort — failure produces `ptr: null`, not an error.
 ---
 
 ## Design Decisions
+
+### IP lookup exclusions
+
+The server excludes exactly IPv4 `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `255.0.0.0/8`, and IPv6 `::1/128`, `fc00::/7`, `fe80::/10`, by numeric address. IPv4-mapped IPv6 follows the embedded IPv4 policy. These exclusions preserve the server's lookup policy; they do not imply that registries lack reservation records. TEST-NET, multicast, documentation IPv6, `::`, and `::10` remain eligible, with outcomes determined by bootstrap coverage and registry responses.
+
+CIDR queries look up the supplied base address, without masking it to a network boundary. The output `ip` preserves the query. Parsing and policy precede every network call.
 
 ### WHOIS-43 (port 43) — deferred
 

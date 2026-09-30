@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/whois-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/whois-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/whois-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.1.5-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/whois-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.1.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/whois-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/whois-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -42,58 +42,44 @@ Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain regi
 
 ### `whois_lookup_domain` <sub>tool</sub>
 
-- RDAP-first via IANA auto-bootstrap — automatically selects the correct registry RDAP server per TLD
-- Returns registrar, creation/expiry dates, nameservers, EPP status codes, and DNSSEC delegation flag
-- Surfaces `registrant_redacted: true` when privacy redaction is in effect (standard post-GDPR for gTLDs)
-- Throws `rdap_no_coverage` when the TLD has no RDAP server in the IANA bootstrap — use `whois_check_availability` instead
-- Throws `domain_not_found` on an RDAP 404 (domain not registered) — use `whois_check_availability` to confirm
+- Accepts a fully qualified domain name and selects the registry RDAP server through IANA bootstrap.
+- Returns registrar, registration dates, nameservers, EPP status, DNSSEC, and `registrant_redacted`; throws `rdap_no_coverage` or `domain_not_found` when no record can be returned.
 
 ---
 
 ### `whois_check_availability` <sub>tool</sub>
 
-- RDAP 404 response maps to `available: true`
-- Registered domains return `available: false` with `registrar` and `expiry_date`
-- `available: null` with `rdap_coverage: false` when the TLD has no RDAP coverage — availability cannot be determined
-- Thin response optimized for bulk name sweeps — no extra fields
+- Accepts a fully qualified domain name for a registration check.
+- Returns `available: true` for RDAP 404, `false` with registrar and expiry for a registered domain, or `null` with `rdap_coverage: false` when coverage is absent.
 
 ---
 
 ### `whois_get_dns` <sub>tool</sub>
 
-- Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR; multiple types fetched in parallel; defaults to A, AAAA, MX, TXT, NS when `types` is omitted
-- Cloudflare primary, NextDNS fallback per type (CAA always uses NextDNS — Cloudflare returns raw hex wire format for it)
-- Returns records with TTLs and the resolving `source` (`cloudflare` or `nextdns`)
-- `nxdomain: true` in the result (not an error) when the domain doesn't exist in DNS
+- Accepts a hostname and optional nonempty `types`: A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR; omission defaults to A, AAAA, MX, TXT, NS. Duplicate types are queried once.
+- Returns records with TTLs and ordered `query_sources: [{type, source}]`, including empty answers and NXDOMAIN. Legacy `source` is `cloudflare` if any query consumed a successful Cloudflare response, otherwise `nextdns`; a nonexistent domain returns `nxdomain: true` as data.
 
 ---
 
 ### `whois_lookup_ip` <sub>tool</sub>
 
-- Accepts an IPv4/IPv6 address or CIDR block; auto-routes to the correct RIR (ARIN, RIPE, APNIC, LACNIC, AFRINIC) via IANA IP bootstrap
-- Returns netblock CIDR, org name, country, abuse contact email
-- Fetches PTR (reverse DNS) via DoH as a best-effort step — `ptr: null` on failure, not an error
-- Throws `private_range` for RFC 1918, loopback, and link-local addresses — no RIR RDAP record exists for them
-- Throws `ip_not_found` on an RIR RDAP 404
+- Accepts a complete IPv4/IPv6 address with at most one decimal CIDR prefix (0–32 / 0–128); no whitespace, zone IDs, or brackets. Queries the base address and echoes the original `ip`. IPv4-mapped IPv6 uses the embedded IPv4 for policy, RDAP, and PTR; other IPv6 uses 32 reversed PTR nibbles.
+- Returns netblock CIDR, organization, country, abuse contact, and best-effort PTR (`null` on failure); throws `invalid_ip` for malformed input or `ip_not_found` on an RIR RDAP 404.
+- `private_range` enforces an explicit policy: IPv4 `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `255.0.0.0/8`; IPv6 `::1/128`, `fc00::/7`, `fe80::/10`. Other special-use addresses remain eligible for registry records or normal no-coverage/not-found outcomes.
 
 ---
 
 ### `whois_lookup_asn` <sub>tool</sub>
 
-- Accepts `AS15169` or bare integer `15169` format
-- Routes to the correct RIR RDAP endpoint via IANA ASN bootstrap
-- Returns `name`, `org_name`, `country`, `rir`, `start_autnum`, `end_autnum`
-- Throws `asn_not_found` on an RIR RDAP 404
+- Accepts a decimal ASN from 1 to 4294967295 with an optional case-insensitive `AS` prefix and leading `+` (e.g., `AS15169`, `AS 15169`, `+15169`). Outer whitespace and whitespace after `AS` are allowed; whitespace inside digits or after `+`, suffixes, decimals, and out-of-range values return `invalid_asn`.
+- Returns `name`, `org_name`, `country`, `rir`, `start_autnum`, and `end_autnum`; throws `asn_not_found` when no ASN record exists.
 
 ---
 
 ### `whois_get_dossier` <sub>tool</sub>
 
-- Runs RDAP domain lookup and DoH (A, MX, NS, TXT) in parallel via `Promise.allSettled`
-- Inferred signals: `age_days`, `privacy_redacted`, `registrar`, `ns_provider` (from NS records), `mx_provider` (from MX records)
-- No synthesized risk scores — factual signals only; the agent decides the verdict
-- Partial results surfaced when one leg fails (`rdap_source_error` / `dns_source_error` on the failed leg)
-- Throws `both_legs_failed` only when both RDAP and DNS fail; individual leg failures are data, not errors
+- Accepts a fully qualified domain name for parallel registration and A/MX/NS/TXT lookups.
+- Returns registration, DNS, domain age, privacy status, and inferred NS/MX providers. Individual failures remain partial data in `rdap_source_error` or `dns_source_error`; `both_legs_failed` means neither source succeeded.
 
 ---
 
@@ -182,7 +168,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
 - No API keys required — all data sources are public.
 
 ### Installation
