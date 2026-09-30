@@ -25,16 +25,27 @@ function inferNsProvider(nsRecords: NormalizedDnsRecord[]): string | undefined {
   if (nsRecords.length === 0) return;
   const ns = (nsRecords[0]?.data ?? '').toLowerCase().replace(/\.$/, '');
   // Common providers
-  if (ns.includes('cloudflare')) return 'Cloudflare';
-  if (ns.includes('awsdns') || ns.includes('amazonaws')) return 'AWS Route 53';
-  if (ns.includes('google')) return 'Google Cloud DNS';
-  if (ns.includes('azure-dns') || ns.includes('microsoftdns')) return 'Azure DNS';
-  if (ns.includes('namebrightdns') || ns.includes('namebright')) return 'NameBright';
-  if (ns.includes('nsone') || ns.includes('ns1.com')) return 'NS1';
-  if (ns.includes('dnsimple')) return 'DNSimple';
-  if (ns.includes('domaincontrol')) return 'GoDaddy';
-  if (ns.includes('name.com')) return 'Name.com';
-  if (ns.includes('registrar-servers')) return 'Namecheap';
+  if (hasDomain(ns, 'cloudflare.com')) return 'Cloudflare';
+  if (/(^|\.)awsdns-\d+\.(com|net|org|co\.uk)$/.test(ns) || hasDomain(ns, 'amazonaws.com'))
+    return 'AWS Route 53';
+  if (hasDomain(ns, 'google.com', 'googledomains.com')) return 'Google Cloud DNS';
+  if (
+    hasDomain(
+      ns,
+      'azure-dns.com',
+      'azure-dns.net',
+      'azure-dns.org',
+      'azure-dns.info',
+      'microsoftdns.com',
+    )
+  )
+    return 'Azure DNS';
+  if (hasDomain(ns, 'namebrightdns.com', 'namebright.com')) return 'NameBright';
+  if (hasDomain(ns, 'nsone.net', 'ns1.com')) return 'NS1';
+  if (hasDomain(ns, 'dnsimple.com')) return 'DNSimple';
+  if (hasDomain(ns, 'domaincontrol.com')) return 'GoDaddy';
+  if (hasDomain(ns, 'name.com')) return 'Name.com';
+  if (hasDomain(ns, 'registrar-servers.com')) return 'Namecheap';
   // Fall back to the second-level domain of the NS server
   const parts = ns.split('.');
   if (parts.length >= 2) return parts[parts.length - 2];
@@ -44,28 +55,30 @@ function inferNsProvider(nsRecords: NormalizedDnsRecord[]): string | undefined {
 /** Infer MX provider from the first MX record data */
 function inferMxProvider(mxRecords: NormalizedDnsRecord[]): string | undefined {
   if (mxRecords.length === 0) return;
-  const mx = (mxRecords[0]?.data ?? '').toLowerCase().replace(/\.$/, '');
-  if (mx.includes('google') || mx.includes('googlemail') || mx.includes('aspmx'))
-    return 'Google Workspace';
-  if (
-    mx.includes('outlook') ||
-    mx.includes('microsoft') ||
-    mx.includes('office365') ||
-    mx.includes('protection.outlook')
-  )
-    return 'Microsoft 365';
-  if (mx.includes('mxroute')) return 'MXroute';
-  if (mx.includes('mailchannels')) return 'MailChannels';
-  if (mx.includes('amazonses') || mx.includes('amazonaws')) return 'Amazon SES';
-  if (mx.includes('fastmail')) return 'Fastmail';
-  if (mx.includes('protonmail')) return 'ProtonMail';
-  if (mx.includes('zoho')) return 'Zoho Mail';
-  if (mx.includes('sendgrid')) return 'SendGrid';
-  if (mx.includes('mailgun')) return 'Mailgun';
+  const mx = (mxRecords[0]?.data ?? '')
+    .trim()
+    .replace(/^\d+\s+/, '')
+    .toLowerCase()
+    .replace(/\.$/, '');
+  if (hasDomain(mx, 'google.com', 'googlemail.com')) return 'Google Workspace';
+  if (hasDomain(mx, 'outlook.com', 'microsoft.com', 'office365.com')) return 'Microsoft 365';
+  if (hasDomain(mx, 'mxroute.com')) return 'MXroute';
+  if (hasDomain(mx, 'mailchannels.net')) return 'MailChannels';
+  if (hasDomain(mx, 'amazonses.com', 'amazonaws.com')) return 'Amazon SES';
+  if (hasDomain(mx, 'fastmail.com', 'messagingengine.com')) return 'Fastmail';
+  if (hasDomain(mx, 'protonmail.com', 'protonmail.ch')) return 'ProtonMail';
+  if (hasDomain(mx, 'zoho.com')) return 'Zoho Mail';
+  if (hasDomain(mx, 'sendgrid.net')) return 'SendGrid';
+  if (hasDomain(mx, 'mailgun.org')) return 'Mailgun';
   // Fall back to second-level domain
   const parts = mx.split('.');
   if (parts.length >= 2) return parts[parts.length - 2];
   return;
+}
+
+/** Match whole DNS domains, including their subdomains. */
+function hasDomain(hostname: string, ...domains: string[]): boolean {
+  return domains.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
 }
 
 /** Compute domain age in days from creation date string */
@@ -200,9 +213,7 @@ export const whoisGetDossier = tool('whois_get_dossier', {
 
   async handler(input, ctx) {
     if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`, {
-        ...ctx.recoveryFor('invalid_domain'),
-      });
+      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
     }
 
     ctx.log.info('Domain dossier lookup', { domain: input.domain });
@@ -222,7 +233,6 @@ export const whoisGetDossier = tool('whois_get_dossier', {
       throw ctx.fail('both_legs_failed', 'Both RDAP and DNS lookups failed — no data available.', {
         rdap_error: rdapSettled.status === 'rejected' ? String(rdapSettled.reason) : undefined,
         dns_error: dnsSettled.status === 'rejected' ? String(dnsSettled.reason) : undefined,
-        ...ctx.recoveryFor('both_legs_failed'),
       });
     }
 
@@ -338,9 +348,14 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     if (result.ns_records.length > 0) lines.push(`**NS:** ${result.ns_records.join(', ')}`);
     if (result.mx_records.length > 0) lines.push(`**MX:** ${result.mx_records.join(', ')}`);
     if (result.txt_records.length > 0) {
-      // TXT records are attacker-controlled free-text; backtick-fence each value to prevent prompt injection
-      const fenced = result.txt_records.slice(0, 3).map((v) => `\`${v}\``);
-      lines.push(`**TXT:** ${fenced.join(' | ')}`);
+      lines.push('**TXT:**');
+      // Longer fences preserve literal data; delimiters are presentation, not a security boundary.
+      for (const value of result.txt_records) {
+        let longestRun = 0;
+        for (const run of value.matchAll(/`+/g)) longestRun = Math.max(longestRun, run[0].length);
+        const fence = '`'.repeat(Math.max(3, longestRun + 1));
+        lines.push(`${fence}\n${value}\n${fence}`);
+      }
     }
 
     // Inferred signals
