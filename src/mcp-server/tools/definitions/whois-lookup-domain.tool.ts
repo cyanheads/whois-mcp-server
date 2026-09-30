@@ -15,7 +15,7 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
     "Look up a domain's registration record — registrar, created/expiry dates, nameservers, EPP status codes, " +
     'DNSSEC flag, and registrant org (where not privacy-redacted). Uses RDAP via IANA bootstrap to auto-select ' +
     'the correct per-TLD RDAP server, returning one normalized shape regardless of TLD. When the TLD has no RDAP ' +
-    'coverage, returns rdap_coverage: false. If the domain is not registered, throws domain_not_found — use ' +
+    'coverage, throws rdap_no_coverage. If the domain is not registered, throws domain_not_found — use ' +
     'whois_check_availability to test availability without triggering an error.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
@@ -91,9 +91,7 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
 
   async handler(input, ctx) {
     if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`, {
-        ...ctx.recoveryFor('invalid_domain'),
-      });
+      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
     }
 
     ctx.log.info('RDAP domain lookup', { domain: input.domain });
@@ -118,7 +116,6 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
     if (!record.rdap_coverage) {
       throw ctx.fail('rdap_no_coverage', `No RDAP server found for the TLD of "${input.domain}".`, {
         domain: input.domain,
-        ...ctx.recoveryFor('rdap_no_coverage'),
       });
     }
 

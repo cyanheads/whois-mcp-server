@@ -17,8 +17,8 @@ describe('session posture', () => {
     // ephemeral port so the test never collides with a running server.
     vi.stubEnv('MCP_TRANSPORT_TYPE', 'http');
     vi.stubEnv('MCP_HTTP_PORT', '0');
+    vi.stubEnv('MCP_HTTP_HOST', '127.0.0.1');
     vi.stubEnv('MCP_LOG_LEVEL', 'error');
-    vi.stubEnv('MCP_FORCE_CONSOLE_LOGGING', 'true');
   });
 
   afterEach(async () => {

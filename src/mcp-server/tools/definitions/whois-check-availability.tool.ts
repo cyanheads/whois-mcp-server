@@ -52,9 +52,7 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
 
   async handler(input, ctx) {
     if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`, {
-        ...ctx.recoveryFor('invalid_domain'),
-      });
+      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
     }
 
     ctx.log.info('RDAP availability check', { domain: input.domain });
