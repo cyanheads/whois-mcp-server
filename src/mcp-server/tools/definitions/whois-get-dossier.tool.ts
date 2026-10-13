@@ -9,7 +9,7 @@ import { getDohService } from '@/services/doh/doh-service.js';
 import type { NormalizedDnsRecord } from '@/services/doh/types.js';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
-import { isValidFqdn } from './_fqdn.js';
+import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
 
 /** True when the error is a typed domain_not_found from rdap-service */
 function isDomainNotFound(err: unknown): boolean {
@@ -105,6 +105,11 @@ export const whoisGetDossier = tool('whois_get_dossier', {
   input: z.object({
     domain: z
       .string()
+      .max(253)
+      .regex(
+        REGISTRATION_NAME_PATTERN,
+        'Provide a dot-separated ASCII hostname such as example.com; labels are 1–63 characters, without underscores, whitespace or a root dot.',
+      )
       .describe(
         'Fully qualified domain name for the triage (e.g., "github.com"). Must be a valid FQDN.',
       ),
@@ -124,8 +129,8 @@ export const whoisGetDossier = tool('whois_get_dossier', {
       .boolean()
       .nullable()
       .describe(
-        'True when the domain has a registration record. False = RDAP 404 (not registered). ' +
-          'Null when RDAP leg failed.',
+        'True when the domain has a registration record. False = RDAP 404 (no registry object found; not registration eligibility). ' +
+          'Null when RDAP coverage is absent or the leg failed.',
       ),
     registrar: z.string().optional().describe('Registrar name from registration record.'),
     created_date: z.string().optional().describe('ISO 8601 registration creation date.'),
@@ -137,12 +142,12 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     dnssec_signed: z
       .boolean()
       .nullable()
-      .describe('True when delegation-signed. Null when RDAP leg unavailable.'),
+      .describe('Provider delegationSigned value; null when evidence or RDAP coverage is absent.'),
     privacy_redacted: z
       .boolean()
       .nullable()
       .describe(
-        'True when registrant contact info is privacy-redacted. Null when RDAP leg unavailable.',
+        'True for explicit registrant redaction evidence; null when evidence or RDAP coverage is absent.',
       ),
     status: z.array(z.string()).describe('EPP status codes. Empty when RDAP leg failed.'),
     nameservers: z
@@ -167,7 +172,7 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     dns_nxdomain: z
       .boolean()
       .nullable()
-      .describe('True when DNS says domain does not exist (NXDOMAIN). Null when DNS leg failed.'),
+      .describe('True when at least one DNS query returned NXDOMAIN. Null when DNS leg failed.'),
 
     // Inferred signals
     ns_provider: z
@@ -196,13 +201,6 @@ export const whoisGetDossier = tool('whois_get_dossier', {
 
   errors: [
     {
-      reason: 'invalid_domain',
-      code: JsonRpcErrorCode.ValidationError,
-      when: 'Input is not a valid FQDN.',
-      recovery:
-        'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".',
-    },
-    {
       reason: 'both_legs_failed',
       code: JsonRpcErrorCode.ServiceUnavailable,
       when: 'Both RDAP and DoH legs failed — no data could be retrieved.',
@@ -212,10 +210,6 @@ export const whoisGetDossier = tool('whois_get_dossier', {
   ],
 
   async handler(input, ctx) {
-    if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
-    }
-
     ctx.log.info('Domain dossier lookup', { domain: input.domain });
 
     // Fan out RDAP and DNS lookups in parallel
@@ -223,10 +217,11 @@ export const whoisGetDossier = tool('whois_get_dossier', {
       getRdapService().lookupDomain(input.domain, ctx),
       getDohService().lookup(input.domain, ['A', 'MX', 'NS', 'TXT'], ctx),
     ]);
+    ctx.signal.throwIfAborted();
 
     const rdapOk = rdapSettled.status === 'fulfilled';
     const dnsOk = dnsSettled.status === 'fulfilled';
-    // domain_not_found is a valid data signal (RDAP 404 = not registered), not a leg failure
+    // A missing registry object is data, not a failed RDAP leg.
     const rdapNotFound = rdapSettled.status === 'rejected' && isDomainNotFound(rdapSettled.reason);
 
     if (!rdapOk && !rdapNotFound && !dnsOk) {
@@ -270,10 +265,10 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     const nsProvider = dnsOk ? (inferNsProvider(nsRecords) ?? null) : null;
     const mxProvider = dnsOk ? (inferMxProvider(mxRecords) ?? null) : null;
 
-    // registered:
-    //   true  — RDAP returned a record (domain exists)
-    //   false — RDAP returned 404 (domain_not_found = not registered)
-    //   null  — RDAP leg errored for another reason, or rdap_coverage: false
+    /**
+     * Preserve the registered field as registry-record presence:
+     * true for a record, false for RDAP 404, null for absent coverage or failure.
+     */
     const registered: boolean | null = rdapNotFound
       ? false
       : rdapOk && reg
@@ -284,7 +279,7 @@ export const whoisGetDossier = tool('whois_get_dossier', {
 
     return {
       domain: input.domain.toLowerCase(),
-      // rdapNotFound means RDAP server was reachable (coverage: true) but domain doesn't exist
+      // RDAP 404 proves coverage, but only establishes registry-record absence.
       rdap_coverage: rdapNotFound ? true : rdapOk ? (reg?.rdap_coverage ?? null) : null,
       registered,
       registrar: reg?.registrar,
@@ -313,14 +308,14 @@ export const whoisGetDossier = tool('whois_get_dossier', {
 
     // Registration section
     lines.push('\n## Registration');
+    lines.push(
+      `**Registered (RDAP record):** ${result.registered === true ? 'Found' : result.registered === false ? 'Not found' : 'Unknown'}`,
+    );
     if (result.rdap_coverage === null) {
       lines.push(`**RDAP:** Failed`);
     } else if (!result.rdap_coverage) {
       lines.push('**RDAP Coverage:** None — TLD has no RDAP server');
     } else {
-      lines.push(
-        `**Registered:** ${result.registered ? 'Yes' : result.registered === false ? 'No' : 'Unknown'}`,
-      );
       if (result.created_date) lines.push(`**Created:** ${result.created_date}`);
       if (result.expiry_date) lines.push(`**Expires:** ${result.expiry_date}`);
       if (result.age_days !== null) lines.push(`**Age:** ${result.age_days} days`);
@@ -335,6 +330,9 @@ export const whoisGetDossier = tool('whois_get_dossier', {
         lines.push(`**Nameservers (RDAP):** ${result.nameservers.join(', ')}`);
     }
     if (result.registrar) lines.push(`**Registrar:** ${result.registrar}`);
+    if (result.rdap_coverage !== true) {
+      lines.push('**DNSSEC:** Unknown', '**Privacy Redacted:** Unknown');
+    }
     if (result.rdap_source_error) lines.push(`**RDAP Error:** ${result.rdap_source_error}`);
 
     // DNS section
@@ -342,7 +340,7 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     if (result.dns_source_error) {
       lines.push(`**DNS:** Failed — ${result.dns_source_error}`);
     } else if (result.dns_nxdomain) {
-      lines.push('**NXDOMAIN:** Domain does not exist in DNS.');
+      lines.push('**NXDOMAIN:** At least one DNS query returned NXDOMAIN.');
     }
     if (result.a_records.length > 0) lines.push(`**A:** ${result.a_records.join(', ')}`);
     if (result.ns_records.length > 0) lines.push(`**NS:** ${result.ns_records.join(', ')}`);

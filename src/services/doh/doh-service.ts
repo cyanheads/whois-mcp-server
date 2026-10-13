@@ -6,10 +6,17 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
+import { serviceUnavailable } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig } from '@/config/server-config.js';
-import type { DnsLookupResult, DnsRecordType, DohResponse, NormalizedDnsRecord } from './types.js';
+import type {
+  DnsLookupResult,
+  DnsRecordType,
+  DohResponse,
+  NormalizedDnsRecord,
+  PtrLookupResult,
+} from './types.js';
 import { DNS_TYPE_NUMBERS } from './types.js';
 
 const CLOUDFLARE_DOH = 'https://cloudflare-dns.com/dns-query';
@@ -34,13 +41,29 @@ export class DohService {
 
     return withRetry(
       async () => {
+        ctx.signal.throwIfAborted();
         const response = await fetchWithTimeout(url, timeoutMs, ctx, {
           headers: {
             Accept: 'application/dns-json',
           },
           signal: ctx.signal,
         });
-        return response.json() as Promise<DohResponse>;
+        const data = (await response.json()) as DohResponse;
+        ctx.signal.throwIfAborted();
+        if (data.TC === true || (data.Status !== 0 && data.Status !== 3)) {
+          throw serviceUnavailable(
+            `DNS ${type} query via ${source} failed: ${data.TC ? 'truncated response' : `RCODE ${data.Status}`}.`,
+            {
+              reason: 'dns_response_failed',
+              type,
+              resolver: source,
+              status: data.Status,
+              truncated: data.TC === true,
+              recovery: { hint: 'Retry the DNS query later or choose another record type.' },
+            },
+          );
+        }
+        return data;
       },
       {
         operation: `doh.fetchSingleType.${source}`,
@@ -59,6 +82,7 @@ export class DohService {
    * Returns `nxdomain: true` when NXDOMAIN (Status 3) is returned.
    */
   async lookup(domain: string, types: DnsRecordType[], ctx: Context): Promise<DnsLookupResult> {
+    ctx.signal.throwIfAborted();
     const config = getServerConfig();
     const records: NormalizedDnsRecord[] = [];
     let nxdomain = false;
@@ -78,7 +102,9 @@ export class DohService {
             ctx,
             source,
           );
-        } catch {
+        } catch (error) {
+          ctx.signal.throwIfAborted();
+          if (type === 'CAA') throw error;
           // Fallback to NextDNS for non-CAA types
           resp = await this.fetchSingleType(
             domain,
@@ -121,17 +147,50 @@ export class DohService {
    * Perform a reverse DNS (PTR) lookup for an IP address.
    * IPv4: reverses octets + .in-addr.arpa
    * IPv6: reverses nibbles + .ip6.arpa
-   * Returns null if the PTR lookup fails or returns no answer.
+   * Follows reachable aliases under one deadline; distinguishes absence from failure.
    */
-  async ptrLookup(ptrName: string, ctx: Context): Promise<string | null> {
+  async ptrLookup(ptrName: string, ctx: Context): Promise<PtrLookupResult> {
+    const signal = AbortSignal.any([
+      ctx.signal,
+      AbortSignal.timeout(getServerConfig().dohTimeoutMs),
+    ]);
+    const ptrCtx = { ...ctx, signal };
+    const normalize = (name: string) => name.toLowerCase().replace(/\.$/, '');
+    let owner = normalize(ptrName);
+    let hops = 0;
+    const visited = new Set([owner]);
     try {
-      const result = await this.lookup(ptrName, ['PTR'], ctx);
-      if (result.nxdomain || result.records.length === 0) return null;
-      const first = result.records[0];
-      if (!first) return null;
-      return first.data.replace(/\.$/, '') || null;
-    } catch {
-      return null;
+      while (true) {
+        signal.throwIfAborted();
+        const result = await this.lookup(owner, ['PTR'], ptrCtx);
+        if (result.nxdomain) return { ptr: null, ptr_status: 'not_found' };
+        let followed = false;
+        while (true) {
+          const ptr = result.records.find(
+            (record) => record.type === 'PTR' && normalize(record.name) === owner,
+          );
+          if (ptr) return { ptr: normalize(ptr.data), ptr_status: 'found' };
+          const alias = result.records.find(
+            (record) => record.type === 'CNAME' && normalize(record.name) === owner,
+          );
+          if (!alias) break;
+          const target = normalize(alias.data);
+          if (visited.has(target) || hops === 5)
+            throw serviceUnavailable('Reverse DNS alias loop or five-transition limit reached.');
+          visited.add(target);
+          owner = target;
+          hops++;
+          followed = true;
+        }
+        if (!followed) return { ptr: null, ptr_status: 'not_found' };
+      }
+    } catch (error) {
+      ctx.signal.throwIfAborted();
+      return {
+        ptr: null,
+        ptr_status: 'failed',
+        ptr_source_error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 }

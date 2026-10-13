@@ -6,7 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getDohService } from '@/services/doh/doh-service.js';
-import { isValidFqdn } from './_fqdn.js';
+import { DNS_NAME_PATTERN } from './_fqdn.js';
 
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'MX', 'TXT', 'NS', 'CNAME', 'SOA', 'CAA', 'PTR'] as const;
 
@@ -15,14 +15,20 @@ export const whoisGetDns = tool('whois_get_dns', {
   description:
     'Fetch DNS records for a domain via DNS-over-HTTPS. Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR. ' +
     'Multiple types are fetched in parallel. NXDOMAIN is returned as nxdomain: true in the result, not as an ' +
-    'error — it means the domain does not exist in DNS.',
+    'error — it means the name does not exist in DNS. NOERROR with no answers is empty data; DNS failure codes ' +
+    'and truncated responses are errors after retries and fallback. TXT values are returned completely and rendered literally.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
     domain: z
       .string()
+      .max(254)
+      .regex(
+        DNS_NAME_PATTERN,
+        'Provide an ASCII DNS owner such as _dmarc.example.com; labels are 1–63 characters and one terminal root dot is allowed.',
+      )
       .describe(
-        'Fully qualified domain name or hostname to query (e.g., "github.com", "mail.example.com").',
+        'ASCII DNS owner name, including underscore labels (e.g., "_dmarc.github.com"). One terminal root dot is normalized; labels are 1–63 characters and the normalized name is at most 253.',
       ),
     types: z
       .array(z.enum(DNS_RECORD_TYPES).describe('A DNS record type to fetch.'))
@@ -39,8 +45,8 @@ export const whoisGetDns = tool('whois_get_dns', {
     nxdomain: z
       .boolean()
       .describe(
-        'True when the domain does not exist in DNS (NXDOMAIN / Status 3). ' +
-          'Records will be empty. This is a valid data signal, not an error.',
+        'True when at least one requested type returned NXDOMAIN / Status 3. ' +
+          'Successful answers from other type queries remain in records. This is data, not an error.',
       ),
     records: z
       .array(
@@ -80,22 +86,18 @@ export const whoisGetDns = tool('whois_get_dns', {
 
   errors: [
     {
-      reason: 'invalid_domain',
-      code: JsonRpcErrorCode.ValidationError,
-      when: 'Input is not a valid FQDN.',
-      recovery:
-        'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".',
+      reason: 'dns_response_failed',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'Resolvers return a DNS failure status or truncated response after retry and fallback.',
+      recovery: 'Retry the DNS query later or choose another record type.',
+      thrownBy: 'service',
+      retryable: true,
     },
   ],
 
   async handler(input, ctx) {
-    if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
-    }
-
     ctx.log.info('DNS lookup via DoH', { domain: input.domain, types: input.types });
-
-    return await getDohService().lookup(input.domain, input.types, ctx);
+    return await getDohService().lookup(input.domain.replace(/\.$/, ''), input.types, ctx);
   },
 
   format: (result) => {
@@ -108,7 +110,7 @@ export const whoisGetDns = tool('whois_get_dns', {
       `**Query sources:** ${result.query_sources.map((query) => `${query.type}: ${query.source}`).join(', ')}`,
     );
     lines.push(
-      `**NXDOMAIN:** ${result.nxdomain === true ? 'Yes — domain does not exist in DNS' : 'No'}`,
+      `**NXDOMAIN:** ${result.nxdomain === true ? 'Yes — at least one query returned NXDOMAIN' : 'No'}`,
     );
 
     // Group records by type and render all fields (name, ttl, data)
@@ -123,8 +125,13 @@ export const whoisGetDns = tool('whois_get_dns', {
       lines.push(`\n## ${type}`);
       for (const rec of recs) {
         // Backticks distinguish TXT data visually; they are not a security boundary.
-        const data = type === 'TXT' ? `\`${rec.data}\`` : rec.data;
-        lines.push(`- **${data}** | name: ${rec.name} | TTL: ${rec.ttl}s`);
+        if (type === 'TXT') {
+          let longestRun = 0;
+          for (const run of rec.data.matchAll(/`+/g))
+            longestRun = Math.max(longestRun, run[0].length);
+          const fence = '`'.repeat(Math.max(3, longestRun + 1));
+          lines.push(`- name: ${rec.name} | TTL: ${rec.ttl}s`, `${fence}\n${rec.data}\n${fence}`);
+        } else lines.push(`- **${rec.data}** | name: ${rec.name} | TTL: ${rec.ttl}s`);
       }
     }
 

@@ -51,11 +51,13 @@ describe('captured RDAP outcomes', () => {
       start_address: '192.0.2.0',
       end_address: '192.0.2.255',
       cidr: '192.0.2.0/24',
+      cidrs: ['192.0.2.0/24'],
       ip_version: 'v4',
       name: 'TEST-NET-1',
       org_name: 'Internet Assigned Numbers Authority',
       abuse_email: 'abuse@iana.org',
       ptr: null,
+      ptr_status: 'not_found',
       rdap_source: 'ARIN',
     });
     for (const value of [
@@ -88,8 +90,12 @@ describe('captured RDAP outcomes', () => {
       const result = await runToolContract(whoisLookupIp, { ip });
       expect(result.structuredContent).toMatchObject({
         error: {
-          code: JsonRpcErrorCode.ServiceUnavailable,
-          message: 'No RIR RDAP server found for this IP address range.',
+          code: JsonRpcErrorCode.NotFound,
+          data: {
+            reason: 'ip_no_rdap_route',
+            retryable: false,
+            recovery: { hint: expect.any(String) },
+          },
         },
       });
       expect(http.calls).toHaveLength(1);

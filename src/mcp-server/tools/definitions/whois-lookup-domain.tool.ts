@@ -7,21 +7,33 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
-import { isValidFqdn } from './_fqdn.js';
+import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
 
 export const whoisLookupDomain = tool('whois_lookup_domain', {
   title: 'Domain Registration Lookup',
   description:
     "Look up a domain's registration record — registrar, created/expiry dates, nameservers, EPP status codes, " +
-    'DNSSEC flag, and registrant org (where not privacy-redacted). Uses RDAP via IANA bootstrap to auto-select ' +
+    'provider DNSSEC evidence, and public registrant organization independently of contact redaction. Uses IANA bootstrap to select ' +
     'the correct per-TLD RDAP server, returning one normalized shape regardless of TLD. When the TLD has no RDAP ' +
-    'coverage, throws rdap_no_coverage. If the domain is not registered, throws domain_not_found — use ' +
-    'whois_check_availability to test availability without triggering an error.',
+    'coverage, throws rdap_no_coverage. A missing registry object throws domain_not_found; ' +
+    'whois_check_availability returns record status without an eligibility guarantee. include_registrar opts into one ' +
+    'bounded registrar referral with separate contact detail; registry fields remain authoritative.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
+    include_registrar: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Follow one guarded registrar RDAP referral for optional contact detail. Registry fields remain authoritative; failed detail is disclosed without discarding the registry record.',
+      ),
     domain: z
       .string()
+      .max(253)
+      .regex(
+        REGISTRATION_NAME_PATTERN,
+        'Provide a dot-separated ASCII hostname such as example.com; labels are 1–63 characters, without underscores, whitespace or a root dot.',
+      )
       .describe(
         'Fully qualified domain name to look up (e.g., "example.com", "github.com"). ' +
           'Must be a valid FQDN — labels separated by dots, each label up to 63 chars.',
@@ -29,6 +41,31 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
   }),
 
   output: z.object({
+    registrar_detail: z
+      .object({
+        status: z
+          .enum(['found', 'no_referral', 'failed'])
+          .describe('Optional registrar lookup outcome.'),
+        source: z
+          .string()
+          .optional()
+          .describe('Registrar RDAP source URL, or attempted referral on failure.'),
+        registrant_org: z
+          .string()
+          .optional()
+          .describe('Public registrar-reported organization, independent of contact redaction.'),
+        registrant_redacted: z
+          .boolean()
+          .nullable()
+          .optional()
+          .describe('Explicit registrar privacy evidence; null when absent.'),
+        source_error: z
+          .string()
+          .optional()
+          .describe('Optional detail failure; registry fields remain usable.'),
+      })
+      .optional()
+      .describe('Registrar contact detail only when include_registrar is true.'),
     domain: z.string().describe('Normalized domain name (lowercased).'),
     rdap_coverage: z
       .boolean()
@@ -55,24 +92,25 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
       .array(z.string())
       .describe('EPP status codes (e.g., clientTransferProhibited, serverDeleteProhibited).'),
     nameservers: z.array(z.string()).describe('Authoritative nameservers for this domain.'),
-    dnssec_signed: z.boolean().describe('True when the domain has DNSSEC delegation signed.'),
+    dnssec_signed: z
+      .boolean()
+      .nullable()
+      .describe('Provider delegationSigned value; null when absent.'),
     registrant_org: z
       .string()
       .optional()
-      .describe('Registrant organization name. Omitted when privacy-redacted.'),
+      .describe(
+        'Public registrant organization from jCard org. Omitted when absent or a placeholder; contact redaction is independent.',
+      ),
     registrant_redacted: z
       .boolean()
-      .describe('True when registrant contact data is privacy-redacted (common post-GDPR).'),
+      .nullable()
+      .describe(
+        'True for explicit registrant redaction evidence; null when privacy evidence is absent.',
+      ),
   }),
 
   errors: [
-    {
-      reason: 'invalid_domain',
-      code: JsonRpcErrorCode.ValidationError,
-      when: 'Input is not a valid FQDN.',
-      recovery:
-        'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".',
-    },
     {
       reason: 'rdap_no_coverage',
       code: JsonRpcErrorCode.NotFound,
@@ -83,22 +121,18 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
     {
       reason: 'domain_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'RDAP server returned 404 — domain is not registered.',
+      when: 'RDAP server returned 404 — no domain record found.',
       recovery:
-        'The domain is not registered. Use whois_check_availability to confirm availability for registration.',
+        'Use whois_check_availability for record status; a missing record does not establish registration eligibility.',
     },
   ],
 
   async handler(input, ctx) {
-    if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
-    }
-
     ctx.log.info('RDAP domain lookup', { domain: input.domain });
 
     let record: NormalizedDomain;
     try {
-      record = await getRdapService().lookupDomain(input.domain, ctx);
+      record = await getRdapService().lookupDomain(input.domain, ctx, input.include_registrar);
     } catch (err) {
       // Re-throw domain_not_found with recovery hint from the typed contract
       if (
@@ -142,14 +176,28 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
     if (result.updated_date) lines.push(`**Last Updated:** ${result.updated_date}`);
     if (result.rdap_last_updated) lines.push(`**RDAP DB Updated:** ${result.rdap_last_updated}`);
     if (result.handle) lines.push(`**Handle:** ${result.handle}`);
-    lines.push(`**DNSSEC:** ${result.dnssec_signed ? 'Signed' : 'Not signed'}`);
     lines.push(
-      `**Registrant Redacted:** ${result.registrant_redacted ? 'Yes (GDPR/privacy)' : 'No'}`,
+      `**DNSSEC:** ${result.dnssec_signed === null ? 'Unknown' : result.dnssec_signed ? 'Signed' : 'Not signed'}`,
+    );
+    lines.push(
+      `**Registrant Redacted:** ${result.registrant_redacted === null ? 'Unknown' : result.registrant_redacted ? 'Yes (GDPR/privacy)' : 'No'}`,
     );
     if (result.registrant_org) lines.push(`**Registrant Org:** ${result.registrant_org}`);
     if (result.status.length > 0) lines.push(`**Status:** ${result.status.join(', ')}`);
     if (result.nameservers.length > 0)
       lines.push(`**Nameservers:** ${result.nameservers.join(', ')}`);
+    if (result.registrar_detail) {
+      const detail = result.registrar_detail;
+      lines.push(`**Registrar Detail:** ${detail.status}`);
+      if (detail.source) lines.push(`**Registrar Source:** ${detail.source}`);
+      if (detail.registrant_org)
+        lines.push(`**Registrar Registrant Org:** ${detail.registrant_org}`);
+      if (detail.status === 'found')
+        lines.push(
+          `**Registrar Registrant Redacted:** ${detail.registrant_redacted === null ? 'Unknown' : detail.registrant_redacted ? 'Yes' : 'No'}`,
+        );
+      if (detail.source_error) lines.push(`**Registrar Detail Error:** ${detail.source_error}`);
+    }
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

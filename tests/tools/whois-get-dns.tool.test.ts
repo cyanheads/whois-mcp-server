@@ -3,7 +3,8 @@
  * @module tests/tools/whois-get-dns.tool.test
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { whoisGetDns } from '@/mcp-server/tools/definitions/whois-get-dns.tool.js';
 import type { DnsLookupResult } from '@/services/doh/types.js';
@@ -116,12 +117,12 @@ describe('whoisGetDns', () => {
     expect(calledTypes).toEqual(['A', 'CAA']);
   });
 
-  it('throws invalid_domain for input without a dot', async () => {
-    const ctx = createMockContext({ errors: whoisGetDns.errors });
-    const input = whoisGetDns.input.parse({ domain: 'nodot' });
-    await expect(whoisGetDns.handler(input, ctx)).rejects.toMatchObject({
-      data: { reason: 'invalid_domain' },
+  it('rejects syntax at the schema before service dispatch', async () => {
+    const result = await runToolContract(whoisGetDns, { domain: 'nodot' });
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
     });
+    expect(doh.lookup).not.toHaveBeenCalled();
   });
 
   it('formats output with grouped record types and all key fields', () => {
@@ -139,8 +140,9 @@ describe('whoisGetDns', () => {
   it('formats NXDOMAIN result correctly', () => {
     const blocks = whoisGetDns.format!(nxdomainResult);
     const text = (blocks[0] as { text: string }).text;
-    expect(text).toContain('Yes');
-    expect(text).toContain('does not exist');
+    expect(text.split('\n').filter((line) => line.startsWith('**NXDOMAIN:**'))).toEqual([
+      '**NXDOMAIN:** Yes — at least one query returned NXDOMAIN',
+    ]);
   });
 
   it('handles sparse upstream payload — no Answer records', () => {

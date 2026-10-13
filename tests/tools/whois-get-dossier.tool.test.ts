@@ -174,12 +174,8 @@ describe('whoisGetDossier', () => {
     expect(result.mx_records).toEqual([]);
   });
 
-  it('throws invalid_domain for input without a dot', async () => {
-    const ctx = createMockContext({ errors: whoisGetDossier.errors });
-    const input = whoisGetDossier.input.parse({ domain: 'nodot' });
-    await expect(whoisGetDossier.handler(input, ctx)).rejects.toMatchObject({
-      data: { reason: 'invalid_domain' },
-    });
+  it('rejects input without a dot at the schema boundary', () => {
+    expect(whoisGetDossier.input.safeParse({ domain: 'nodot' }).success).toBe(false);
   });
 
   // CRITICAL: RDAP 404 (domain_not_found typed error) is data, not a leg failure

@@ -3,11 +3,15 @@
  * @module tests/tools/lookup-contracts.test
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { whoisCheckAvailability } from '@/mcp-server/tools/definitions/whois-check-availability.tool.js';
+import { whoisGetDns } from '@/mcp-server/tools/definitions/whois-get-dns.tool.js';
+import { whoisGetDossier } from '@/mcp-server/tools/definitions/whois-get-dossier.tool.js';
 import { whoisLookupAsn } from '@/mcp-server/tools/definitions/whois-lookup-asn.tool.js';
+import { whoisLookupDomain } from '@/mcp-server/tools/definitions/whois-lookup-domain.tool.js';
 import { whoisLookupIp } from '@/mcp-server/tools/definitions/whois-lookup-ip.tool.js';
 import { validateIp } from '@/services/rdap/rdap-service.js';
 import { textOf, upstream } from '../helpers/upstream.js';
@@ -16,6 +20,51 @@ let http: ReturnType<typeof upstream>;
 afterEach(() => {
   http?.restore();
   vi.restoreAllMocks();
+});
+
+describe('serialized identifier grammar (#26)', () => {
+  it('rejects an unrepairable registrar boolean before dispatch', async () => {
+    http = upstream();
+    const result = await runToolContract(whoisLookupDomain, {
+      domain: 'example.com',
+      // @ts-expect-error Exercise an unrepairable wrong type at the framework boundary.
+      include_registrar: 'maybe',
+    });
+    expect(result.structuredContent).toMatchObject({
+      error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
+    });
+    expect(http.calls).toHaveLength(0);
+  });
+  it.each([
+    [whoisLookupAsn, 'asn', 'AS+0015169', 'AS15169abc'],
+    [whoisLookupIp, 'ip', '8.8.8.8/24', '8.8.8.8/24garbage'],
+    [whoisLookupDomain, 'domain', 'example.com', 'notadomain'],
+    [whoisCheckAvailability, 'domain', 'example.com', 'notadomain'],
+    [whoisGetDossier, 'domain', 'example.com', 'notadomain'],
+    [whoisGetDns, 'domain', '_dmarc.example.com.', 'notadomain'],
+  ] as const)('advertises a useful %s identifier pattern', (definition, key, valid, invalid) => {
+    const json = z.toJSONSchema(definition.input);
+    const field = json.properties![key];
+    expect(field).toMatchObject({ type: 'string', pattern: expect.any(String) });
+    if (typeof field !== 'object' || typeof field.pattern !== 'string')
+      throw new Error(`Missing serialized ${key} pattern`);
+    const pattern = new RegExp(field.pattern);
+    expect(pattern.test(valid)).toBe(true);
+    expect(pattern.test(invalid)).toBe(false);
+  });
+  it.each(['\tas +0015169\n', `AS+${'0'.repeat(1000)}15169`, '4294967295'])(
+    'retains accepted ASN %j',
+    (asn) => {
+      expect(whoisLookupAsn.input.safeParse({ asn }).success).toBe(true);
+    },
+  );
+  it.each([`8.8.8.8/${'0'.repeat(1000)}24`, '2001:db8::192.0.2.1', '::ffff:8.8.8.8/128'])(
+    'retains accepted IP %j',
+    (ip) => {
+      expect(whoisLookupIp.input.safeParse({ ip }).success).toBe(true);
+      expect(validateIp(ip).valid).toBe(true);
+    },
+  );
 });
 
 describe('lookup characterization', () => {
@@ -43,10 +92,12 @@ describe('lookup characterization', () => {
     'preserves query and base-address lookup for %s',
     async (ip) => {
       http = upstream({
-        dns: () =>
+        dns: (_type, url) =>
           Response.json({
             Status: 0,
-            Answer: [{ type: 12, name: 'ptr', TTL: 60, data: 'dns.example.' }],
+            Answer: [
+              { type: 12, name: url.searchParams.get('name'), TTL: 60, data: 'dns.example.' },
+            ],
           }),
       });
       const result = await runToolContract(whoisLookupIp, { ip });
@@ -70,6 +121,7 @@ describe('lookup characterization', () => {
     expect(result.structuredContent).toEqual({
       domain: 'example.local',
       available: null,
+      registration_status: 'unknown',
       rdap_coverage: false,
     });
     expect(textOf(result)).toContain('Unknown');
@@ -110,15 +162,19 @@ describe('ASN regression #5', () => {
     'AS',
     '',
   ])('rejects the entire invalid token %j before fetch with recovery', async (asn) => {
+    const semantic = ['0', '4294967296', '9007199254740993'].includes(asn);
     http = upstream();
     const result = await runToolContract(whoisLookupAsn, { asn });
     expect(result.structuredContent).toMatchObject({
       error: {
-        code: JsonRpcErrorCode.ValidationError,
-        data: { reason: 'invalid_asn', recovery: { hint: expect.any(String) } },
+        code: semantic ? JsonRpcErrorCode.ValidationError : JsonRpcErrorCode.InvalidParams,
+        data: {
+          reason: semantic ? 'invalid_asn' : 'invalid_arguments',
+          recovery: { hint: expect.any(String) },
+        },
       },
     });
-    expect(textOf(result)).toContain('Recovery:');
+    expect(textOf(result)).toContain(semantic ? 'Recovery:' : 'asn:');
     expect(http.calls).toHaveLength(0);
   });
   it.each([
@@ -172,16 +228,32 @@ describe('IP regression #6', () => {
     '2001:db8::1%en0',
     '[2001:db8::1]',
   ])('rejects malformed IP %j without fetch', async (ip) => {
+    const semantic = [
+      '8.8.8.8/33',
+      '08.8.8.8',
+      '256.1.1.1',
+      '2001:::1',
+      ':::',
+      '1:2:3',
+      '12345::1',
+      '1::2::3',
+      '1:2:3:4:5:6:7:8:9',
+      '1:2:3:4:5:6:7::8',
+      '2001:db8::1/129',
+    ].includes(ip);
     http = upstream();
     expect(validateIp(ip).valid).toBe(false);
     const result = await runToolContract(whoisLookupIp, { ip });
     expect(result.structuredContent).toMatchObject({
       error: {
-        code: JsonRpcErrorCode.ValidationError,
-        data: { reason: 'invalid_ip', recovery: { hint: expect.any(String) } },
+        code: semantic ? JsonRpcErrorCode.ValidationError : JsonRpcErrorCode.InvalidParams,
+        data: {
+          reason: semantic ? 'invalid_ip' : 'invalid_arguments',
+          recovery: { hint: expect.any(String) },
+        },
       },
     });
-    expect(textOf(result)).toContain('Recovery:');
+    expect(textOf(result)).toContain(semantic ? 'Recovery:' : 'ip:');
     expect(http.calls).toHaveLength(0);
   });
 

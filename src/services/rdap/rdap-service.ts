@@ -15,6 +15,7 @@ import {
 } from '@cyanheads/mcp-ts-core/errors';
 import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
+import { parse } from 'tldts';
 import { getServerConfig } from '@/config/server-config.js';
 import type {
   IanaBootstrap,
@@ -184,6 +185,41 @@ function registrarIanaId(entity: RdapEntity): string | undefined {
   return entity.publicIds?.find((p) => p.type === 'IANA Registrar ID')?.identifier;
 }
 
+const REDACTED_VALUES = new Set([
+  'REDACTED FOR PRIVACY',
+  'REDACTED REGISTRANT',
+  'REDACTED',
+  'DATA REDACTED',
+  'NOT DISCLOSED',
+]);
+/** Registrant organization and explicit, scoped privacy evidence; absence stays unknown. */
+function registrantEvidence(raw: RdapDomainRaw): {
+  registrant_org?: string;
+  registrant_redacted: true | null;
+} {
+  const registrant = findEntityByRole(raw.entities ?? [], 'registrant');
+  const org = registrant?.vcardArray ? vcardField(registrant.vcardArray[1], 'org') : undefined;
+  const placeholder = (value: string | undefined) =>
+    value !== undefined && REDACTED_VALUES.has(value.trim().toUpperCase());
+  const entityRedaction =
+    registrant &&
+    (placeholder(entityName(registrant)) ||
+      placeholder(org) ||
+      (registrant.redacted?.length ?? 0) > 0 ||
+      registrant.remarks?.some((remark) =>
+        /redact|privacy/i.test([remark.title, ...(remark.description ?? [])].join(' ')),
+      ));
+  const scopedRedaction = raw.redacted?.some((entry) =>
+    /registrant/i.test(
+      [entry.name?.type, entry.name?.description, entry.prePath, entry.postPath].join(' '),
+    ),
+  );
+  return {
+    ...(org && !placeholder(org) ? { registrant_org: org } : {}),
+    registrant_redacted: entityRedaction || scopedRedaction ? true : null,
+  };
+}
+
 /** Normalize RDAP domain response to our output shape */
 function normalizeDomain(raw: RdapDomainRaw): NormalizedDomain & { rdap_coverage: true } {
   const events = raw.events ?? [];
@@ -199,9 +235,7 @@ function normalizeDomain(raw: RdapDomainRaw): NormalizedDomain & { rdap_coverage
   const registrar = registrarEntity ? entityName(registrarEntity) : undefined;
   const registrarIanaIdVal = registrarEntity ? registrarIanaId(registrarEntity) : undefined;
 
-  const registrantEntity = findEntityByRole(entities, 'registrant');
-  const registrantOrg = registrantEntity ? entityName(registrantEntity) : undefined;
-  const registrantRedacted = !registrantOrg;
+  const evidence = registrantEvidence(raw);
 
   const rdapLastUpdated = getDate('last update of RDAP database');
   const createdDate = getDate('registration');
@@ -215,8 +249,8 @@ function normalizeDomain(raw: RdapDomainRaw): NormalizedDomain & { rdap_coverage
     rdap_coverage: true,
     status: raw.status ?? [],
     nameservers,
-    dnssec_signed: raw.secureDNS?.delegationSigned ?? false,
-    registrant_redacted: registrantRedacted,
+    dnssec_signed: raw.secureDNS?.delegationSigned ?? null,
+    ...evidence,
   };
 
   if (raw.handle !== undefined) result.handle = raw.handle;
@@ -226,7 +260,6 @@ function normalizeDomain(raw: RdapDomainRaw): NormalizedDomain & { rdap_coverage
   if (updatedDate !== undefined) result.updated_date = updatedDate;
   if (expiryDate !== undefined) result.expiry_date = expiryDate;
   if (rdapLastUpdated !== undefined) result.rdap_last_updated = rdapLastUpdated;
-  if (registrantOrg !== undefined) result.registrant_org = registrantOrg;
 
   return result;
 }
@@ -239,25 +272,27 @@ function normalizeIpNetwork(raw: RdapIpNetworkRaw, ip: string): NormalizedIpNetw
   const orgName = registrant ? entityName(registrant) : undefined;
   const abuseEmail = abuse ? entityEmail(abuse) : undefined;
 
-  let cidr: string | undefined;
-  if (raw.cidr0_cidrs && raw.cidr0_cidrs.length > 0) {
-    const c = raw.cidr0_cidrs[0];
-    if (c) {
-      if (c.v4prefix !== undefined && c.length !== undefined) cidr = `${c.v4prefix}/${c.length}`;
-      else if (c.v6prefix !== undefined && c.length !== undefined)
-        cidr = `${c.v6prefix}/${c.length}`;
-    }
-  }
+  const cidrs = (raw.cidr0_cidrs ?? []).flatMap((component) => {
+    const prefix = component.v4prefix ?? component.v6prefix;
+    return prefix !== undefined && component.length !== undefined
+      ? [`${prefix}/${component.length}`]
+      : [];
+  });
 
   const selfLink = raw.links?.find((l) => l.rel === 'self')?.href ?? '';
   const rdapSource = rirFromSelfLink(selfLink);
 
-  const result: NormalizedIpNetwork = { ip, ptr: null };
+  const result: NormalizedIpNetwork = {
+    ip,
+    cidrs,
+    ...(cidrs.length === 1 ? { cidr: cidrs.join() } : {}),
+    ptr: null,
+    ptr_status: 'not_found',
+  };
 
   if (raw.handle !== undefined) result.handle = raw.handle;
   if (raw.startAddress !== undefined) result.start_address = raw.startAddress;
   if (raw.endAddress !== undefined) result.end_address = raw.endAddress;
-  if (cidr !== undefined) result.cidr = cidr;
   if (raw.ipVersion !== undefined) result.ip_version = raw.ipVersion;
   if (raw.name !== undefined) result.name = raw.name;
   if (raw.type !== undefined) result.type = raw.type;
@@ -408,7 +443,12 @@ export class RdapService {
   }
 
   /** Look up a domain registration record via RDAP */
-  async lookupDomain(domain: string, ctx: Context): Promise<NormalizedDomain> {
+  async lookupDomain(
+    domain: string,
+    ctx: Context,
+    includeRegistrar = false,
+  ): Promise<NormalizedDomain> {
+    ctx.signal.throwIfAborted();
     const rdapServer = await this.findDomainRdapServer(domain, ctx);
 
     if (!rdapServer) {
@@ -417,8 +457,8 @@ export class RdapService {
         rdap_coverage: false,
         status: [],
         nameservers: [],
-        dnssec_signed: false,
-        registrant_redacted: false,
+        dnssec_signed: null,
+        registrant_redacted: null,
       };
     }
 
@@ -441,15 +481,18 @@ export class RdapService {
           maxRetries: config.rdapMaxRetries,
           baseDelayMs: 1000,
           signal: ctx.signal,
-          // 404 is NOT transient — domain is not registered; don't retry
+          // A missing registry object is terminal, not an eligibility statement.
           isTransient: (err: unknown) => !isRdapNotFound(err),
         },
       );
-      return normalizeDomain(raw);
+      const record = normalizeDomain(raw);
+      ctx.signal.throwIfAborted();
+      if (includeRegistrar) record.registrar_detail = await this.registrarDetail(raw, domain, ctx);
+      return record;
     } catch (err) {
-      // RDAP 404 on a domain lookup means the domain is not registered
+      // RDAP 404 establishes record absence only.
       if (isRdapNotFound(err)) {
-        throw notFound(`Domain "${domain}" is not registered (RDAP 404).`, {
+        throw notFound(`No RDAP domain record found for "${domain}" (404).`, {
           reason: 'domain_not_found',
           domain: domain.toLowerCase(),
         });
@@ -458,23 +501,102 @@ export class RdapService {
     }
   }
 
+  /** One optional registrar exchange, with guarded redirects and a total deadline. */
+  private async registrarDetail(
+    raw: RdapDomainRaw,
+    domain: string,
+    ctx: Context,
+  ): Promise<NonNullable<NormalizedDomain['registrar_detail']>> {
+    const referral = raw.links?.find(
+      (link) =>
+        link.rel === 'related' && link.type?.toLowerCase() === 'application/rdap+json' && link.href,
+    )?.href;
+    if (!referral) return { status: 'no_referral' };
+    try {
+      const url = new URL(referral);
+      if (url.protocol !== 'https:' || url.username || url.password)
+        throw validationError('Registrar referral must use HTTPS without credentials.');
+      const signal = AbortSignal.any([
+        ctx.signal,
+        AbortSignal.timeout(getServerConfig().rdapTimeoutMs),
+      ]);
+      signal.throwIfAborted();
+      const aborted = Promise.withResolvers<never>();
+      const onAbort = () => aborted.reject(signal.reason);
+      signal.addEventListener('abort', onAbort, { once: true });
+      let response: Response;
+      try {
+        // The guard's DNS preflight precedes its fetch timer; bound that await as well.
+        response = await Promise.race([
+          fetchWithTimeout(url, getServerConfig().rdapTimeoutMs, ctx, {
+            headers: { Accept: 'application/rdap+json' },
+            signal,
+            rejectPrivateIPs: true,
+          }),
+          aborted.promise,
+        ]);
+      } finally {
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (
+        !response.headers
+          .get('content-type')
+          ?.toLowerCase()
+          .split(';')[0]
+          ?.trim()
+          .match(/^application\/(?:rdap\+json|json)$/)
+      )
+        throw serviceUnavailable('Registrar response is not RDAP JSON.');
+      const detail: unknown = await response.json();
+      signal.throwIfAborted();
+      if (
+        !detail ||
+        typeof detail !== 'object' ||
+        !('objectClassName' in detail) ||
+        detail.objectClassName !== 'domain' ||
+        !('ldhName' in detail) ||
+        typeof detail.ldhName !== 'string' ||
+        detail.ldhName.toLowerCase() !== domain.toLowerCase()
+      )
+        throw serviceUnavailable('Registrar response does not contain the matching domain object.');
+      const evidence = registrantEvidence(detail as RdapDomainRaw);
+      return { status: 'found', source: response.url || url.href, ...evidence };
+    } catch (error) {
+      ctx.signal.throwIfAborted();
+      return {
+        status: 'failed',
+        source: referral,
+        source_error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   /**
-   * Check domain availability via RDAP.
-   * Returns `{ available: true }` on 404, normalized record on 200,
-   * or `{ available: null }` when TLD has no RDAP coverage.
+   * Check registry record presence; a miss never establishes registration eligibility.
+   * Recognized ICANN subdomains are rejected without querying their parent.
    */
   async checkAvailability(
     domain: string,
     ctx: Context,
   ): Promise<
-    | { available: true }
-    | { available: false; record: NormalizedDomain }
-    | { available: null; rdap_coverage: false }
+    | { available: null; registration_status: 'not_found'; rdap_coverage: true }
+    | { available: false; registration_status: 'registered'; record: NormalizedDomain }
+    | { available: null; registration_status: 'unknown'; rdap_coverage: false }
   > {
+    const suffix = parse(domain, { allowPrivateDomains: false });
+    if (suffix.isIcann && suffix.domain && suffix.subdomain) {
+      throw validationError(
+        `"${domain}" is a subdomain; its registrable parent is "${suffix.domain}".`,
+        {
+          reason: 'non_registrable_domain',
+          registrable_parent: suffix.domain,
+        },
+      );
+    }
     const rdapServer = await this.findDomainRdapServer(domain, ctx);
 
     if (!rdapServer) {
-      return { available: null, rdap_coverage: false };
+      return { available: null, registration_status: 'unknown', rdap_coverage: false };
     }
 
     const config = getServerConfig();
@@ -496,17 +618,17 @@ export class RdapService {
           maxRetries: config.rdapMaxRetries,
           baseDelayMs: 1000,
           signal: ctx.signal,
-          // 404 is NOT transient — it's the availability signal
+          // A registry miss is terminal record-status data.
           isTransient: (err: unknown) => !isRdapNotFound(err),
         },
       );
 
       const record = normalizeDomain(raw);
-      return { available: false, record };
+      return { available: false, registration_status: 'registered', record };
     } catch (err) {
-      // A 404 from the RDAP server means the domain is available (not registered)
+      // Preserve record absence independently of registration eligibility.
       if (isRdapNotFound(err)) {
-        return { available: true };
+        return { available: null, registration_status: 'not_found', rdap_coverage: true };
       }
       throw err;
     }
@@ -533,7 +655,12 @@ export class RdapService {
 
     const rdapServer = await this.findIpRdapServer(base, isIpv6, ctx);
     if (!rdapServer) {
-      throw serviceUnavailable('No RIR RDAP server found for this IP address range.', { ip });
+      throw notFound('No RIR RDAP route covers this IP address in the IANA bootstrap.', {
+        ip,
+        reason: 'ip_no_rdap_route',
+        retryable: false,
+        ...ctx.recoveryFor('ip_no_rdap_route'),
+      });
     }
 
     const config = getServerConfig();

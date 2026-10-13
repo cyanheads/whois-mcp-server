@@ -14,6 +14,12 @@ export interface RdapEntity {
   handle?: string;
   objectClassName?: string;
   publicIds?: Array<{ type: string; identifier: string }>;
+  redacted?: Array<{
+    name?: { type?: string; description?: string };
+    prePath?: string;
+    postPath?: string;
+  }>;
+  remarks?: Array<{ title?: string; description?: string[] }>;
   roles?: string[];
   vcardArray?: ['vcard', VCard];
 }
@@ -47,6 +53,11 @@ export interface RdapDomainRaw {
   nameservers?: RdapNameserver[];
   objectClassName?: string;
   port43?: string;
+  redacted?: Array<{
+    name?: { type?: string; description?: string };
+    prePath?: string;
+    postPath?: string;
+  }>;
   remarks?: Array<{ description: string[] }>;
   secureDNS?: {
     delegationSigned?: boolean;
@@ -101,7 +112,7 @@ export interface IanaBootstrap {
 /** Normalized domain registration record */
 export interface NormalizedDomain {
   created_date?: string;
-  dnssec_signed: boolean;
+  dnssec_signed: boolean | null;
   domain: string;
   expiry_date?: string;
   handle?: string;
@@ -109,8 +120,15 @@ export interface NormalizedDomain {
   rdap_coverage: boolean;
   rdap_last_updated?: string;
   registrant_org?: string;
-  registrant_redacted: boolean;
+  registrant_redacted: boolean | null;
   registrar?: string;
+  registrar_detail?: {
+    status: 'found' | 'no_referral' | 'failed';
+    source?: string;
+    registrant_org?: string;
+    registrant_redacted?: boolean | null;
+    source_error?: string;
+  };
   registrar_iana_id?: string;
   status: string[];
   updated_date?: string;
@@ -120,6 +138,7 @@ export interface NormalizedDomain {
 export interface NormalizedIpNetwork {
   abuse_email?: string;
   cidr?: string;
+  cidrs: string[];
   country?: string;
   end_address?: string;
   handle?: string;
@@ -129,6 +148,8 @@ export interface NormalizedIpNetwork {
   org_name?: string;
   /** Reverse DNS hostname, null when PTR lookup fails or returns nothing. */
   ptr: string | null;
+  ptr_source_error?: string;
+  ptr_status: 'found' | 'not_found' | 'failed';
   rdap_source?: string;
   start_address?: string;
   type?: string;

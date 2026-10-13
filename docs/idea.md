@@ -1,6 +1,6 @@
 ---
 name: whois-mcp-server
-description: "WHOIS, RDAP, and DNS in one normalized surface — domain registration, availability, DNS records, and IP ownership without per-registry format wrangling."
+description: "WHOIS, RDAP, and DNS in one normalized surface — domain registration, registry record status, DNS records, and IP ownership without per-registry format wrangling."
 version: 0.0.0
 status: idea
 category: developer-tooling
@@ -31,6 +31,8 @@ composes-with: nist-nvd-mcp-server, attack-surface-mcp-server, threat-intel-mcp-
 
 # whois-mcp-server
 
+Original concept from 2026-05-30. The proposed sources and tool sketch below include capabilities that were deferred; [design.md](design.md) records the implemented RDAP and DoH contracts.
+
 Domain and IP intelligence with one normalized shape. The reason this beats `curl` isn't access — it's that the access is a mess: classic WHOIS is unstructured, registry-specific free-text (every TLD formats its output differently), RDAP is the structured IETF successor but you must bootstrap through IANA to find the right RDAP server per TLD/IP, and DNS lives on a separate path entirely. The server hides all of it: RDAP-first with auto-bootstrap, port-43 WHOIS fallback with the free-text parsed into the same schema, DNS over HTTPS, and IP → RIR lookups — the agent gets a clean record regardless of TLD.
 
 **Audience:** Developers, ops/SRE, and security/threat-triage. "Who owns this domain, when does it expire, what does it resolve to, who runs this IP" is daily work across all three.
@@ -38,7 +40,7 @@ Domain and IP intelligence with one normalized shape. The reason this beats `cur
 ## User Goals
 
 - Look up a domain's registration: registrar, created/updated/expires, nameservers, status codes, DNSSEC
-- Check whether a domain is registered or available
+- Check registry record status without guaranteeing registration eligibility
 - Get DNS records for a domain (A/AAAA/MX/TXT/NS/CNAME/SOA/CAA)
 - Look up an IP's network owner, ASN, country, and abuse contact
 - Reverse-DNS an IP
@@ -65,9 +67,9 @@ whois_lookup_domain      — the flagship. Domain → normalized registration re
                            WHOIS fallback with free-text parsed to the same schema.
                            One shape regardless of TLD.
 
-whois_check_availability — is this domain registered or available? Fast yes/no, plus
-                           expiry date and registrar when registered. For "can I
-                           register X" and bulk name checks.
+whois_check_availability — registered/not_found/unknown registry record status, plus
+                           expiry date and registrar when registered. A missing
+                           record never guarantees registration eligibility.
 
 whois_get_dns    — DNS records for a domain over DoH: A, AAAA, MX, TXT, NS,
                            CNAME, SOA, CAA. types[] selects which. Returns records
@@ -94,9 +96,9 @@ whois_get_dossier        — workflow: domain → registration + DNS + factual s
 
 - **The moat is normalization.** RDAP bootstrap (IANA → per-TLD / per-RIR RDAP server) + free-text WHOIS parsing into one schema + a unified DNS path. Agents otherwise juggle the IANA bootstrap registry, dozens of TLD-specific WHOIS text formats, and a separate DNS library.
 - **RDAP-first, WHOIS-43 fallback — and that split has a hosting consequence.** RDAP and DoH are HTTPS/JSON (work on Cloudflare Workers, the framework's Workers target); port-43 WHOIS is raw TCP (Node-only). The Workers build is RDAP + DoH only and degrades gracefully where RDAP coverage is thin (some ccTLDs). Document the runtime split.
-- **Privacy redaction is the norm now** (GDPR/ICANN) — registrant fields are frequently redacted. Surface "redacted" explicitly rather than implying the data is missing or unknown.
+- **Privacy evidence is independent of organization data.** Surface explicit registrant redaction as true and absent evidence as unknown; public org can coexist with contact redaction.
 - **No synthesized risk score.** Surface factual signals (domain age, privacy flag, registrar, NS/MX provider) and let the agent judge. A fabricated "threat score" built from arbitrary weights is exactly the kind of empty signal to avoid — the dossier gives the inputs, not a verdict.
 - Cache aggressively (registration data changes slowly) and back off per-registry; rate limits are uneven across registries/RIRs.
-- **Naming.** Scope includes DNS + IP, broader than the literal "whois." Kept `whois-mcp-server` because that's the term people search for; `domain-intel-mcp-server` is the alternative if signaling DNS/IP inclusion matters more than recognizability. Open question for build time — see chat.
+- **Naming.** Scope includes DNS + IP, broader than the literal "whois." Kept `whois-mcp-server` because that's the term people search for; `domain-intel-mcp-server` was the alternative if signaling DNS/IP inclusion mattered more than recognizability.
 - Composes with `nist-nvd` and the `attack-surface` / `threat-intel` security ideas (domain age + ownership + DNS are standard indicator-enrichment inputs).
-- README one-liner: "WHOIS, RDAP, and DNS in one normalized surface — domain registration, availability, records, and IP ownership without the per-registry format wrangling."
+- README one-liner: "WHOIS, RDAP, and DNS in one normalized surface — domain registration, registry record status, records, and IP ownership without the per-registry format wrangling."

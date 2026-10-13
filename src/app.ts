@@ -5,6 +5,7 @@
  */
 
 import type { CreateAppOptions } from '@cyanheads/mcp-ts-core';
+import { getServerConfig } from './config/server-config.js';
 import { whoisCheckAvailability } from './mcp-server/tools/definitions/whois-check-availability.tool.js';
 import { whoisGetDns } from './mcp-server/tools/definitions/whois-get-dns.tool.js';
 import { whoisGetDossier } from './mcp-server/tools/definitions/whois-get-dossier.tool.js';
@@ -37,13 +38,14 @@ export const appOptions = {
   prompts: [],
   instructions:
     'whois-mcp-server: domain and IP intelligence via RDAP and DNS-over-HTTPS. No API keys required.\n' +
-    '- whois_lookup_domain: full registration record (registrar, dates, status, nameservers)\n' +
-    '- whois_check_availability: is a domain available to register? (RDAP 404 = available)\n' +
-    '- whois_get_dns: DNS records for any hostname (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR)\n' +
-    '- whois_lookup_ip: IP/CIDR netblock, org, abuse contact, and PTR via RIR RDAP\n' +
+    '- whois_lookup_domain: registry record; include_registrar opts into separate registrar contact detail\n' +
+    '- whois_check_availability: registered/not_found/unknown RDAP record status; absence does not establish registration eligibility\n' +
+    '- whois_get_dns: ASCII DNS owner names, including underscores and one root dot (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR)\n' +
+    '- whois_lookup_ip: IP/CIDR netblock CIDRs, org, abuse contact, and found/not_found/failed PTR outcome\n' +
     '- whois_lookup_asn: ASN to org/RIR resolution\n' +
-    '- whois_get_dossier: one-call domain triage — registration + DNS in parallel with inferred signals',
+    '- whois_get_dossier: domain triage with partial source errors; absent DNSSEC/privacy evidence stays unknown',
   setup(core) {
+    getServerConfig();
     initRdapService(core.config, core.storage);
     initDohService(core.config, core.storage);
   },

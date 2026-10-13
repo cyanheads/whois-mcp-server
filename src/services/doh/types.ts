@@ -56,3 +56,9 @@ export interface DnsLookupResult {
   records: NormalizedDnsRecord[];
   source: 'cloudflare' | 'nextdns';
 }
+
+/** Best-effort reverse lookup distinguishes a hostname, successful absence and failure. */
+export type PtrLookupResult =
+  | { ptr: string; ptr_status: 'found' }
+  | { ptr: null; ptr_status: 'not_found' }
+  | { ptr: null; ptr_status: 'failed'; ptr_source_error: string };

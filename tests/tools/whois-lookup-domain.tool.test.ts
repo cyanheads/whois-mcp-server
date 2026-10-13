@@ -81,19 +81,11 @@ describe('whoisLookupDomain', () => {
   });
 
   it('throws invalid_domain for a bare hostname without TLD', async () => {
-    const ctx = createMockContext({ errors: whoisLookupDomain.errors });
-    const input = whoisLookupDomain.input.parse({ domain: 'notadomain' });
-    await expect(whoisLookupDomain.handler(input, ctx)).rejects.toMatchObject({
-      data: { reason: 'invalid_domain' },
-    });
+    expect(whoisLookupDomain.input.safeParse({ domain: 'notadomain' }).success).toBe(false);
   });
 
   it('throws invalid_domain for an empty string', async () => {
-    const ctx = createMockContext({ errors: whoisLookupDomain.errors });
-    const input = whoisLookupDomain.input.parse({ domain: '' });
-    await expect(whoisLookupDomain.handler(input, ctx)).rejects.toMatchObject({
-      data: { reason: 'invalid_domain' },
-    });
+    expect(whoisLookupDomain.input.safeParse({ domain: '' }).success).toBe(false);
   });
 
   it('throws rdap_no_coverage when service returns rdap_coverage: false', async () => {

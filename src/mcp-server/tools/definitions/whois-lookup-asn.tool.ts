@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
+import { ASN_PATTERN } from './_fqdn.js';
 
 export const whoisLookupAsn = tool('whois_lookup_asn', {
   title: 'ASN Lookup',
@@ -18,6 +19,11 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
   input: z.object({
     asn: z
       .string()
+      .min(1)
+      .regex(
+        ASN_PATTERN,
+        'Provide decimal ASN digits with optional AS prefix, adjacent + and outer whitespace, such as AS15169.',
+      )
       .describe(
         'Decimal ASN from 1 to 4294967295. Optional case-insensitive AS prefix and leading + ' +
           '(e.g., "AS15169", "AS 15169", "+15169"). Outer whitespace and whitespace after AS are accepted; ' +

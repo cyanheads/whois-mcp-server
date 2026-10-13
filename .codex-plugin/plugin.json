@@ -1,7 +1,7 @@
 {
   "name": "whois-mcp-server",
   "version": "0.1.6",
-  "description": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
+  "description": "Look up domain registration, check registry record status, fetch DNS records, and resolve IPs and ASNs over RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
     "email": "casey@caseyjhand.com",
@@ -30,8 +30,8 @@
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
     "displayName": "whois-mcp-server",
-    "shortDescription": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
-    "longDescription": "Look up domain registration, check availability, fetch DNS records, and resolve IPs and ASNs via RDAP and DNS-over-HTTPS. Six tools: whois_lookup_domain (full registration record), whois_check_availability (RDAP 404 = available), whois_get_dns (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR), whois_lookup_ip (netblock, org, abuse contact, PTR), whois_lookup_asn (ASN to org/RIR), and whois_get_dossier (one-call domain triage). IANA bootstrap auto-routes each query to the correct RDAP server; no API keys required. Runs over stdio or Streamable HTTP.",
+    "shortDescription": "Look up domain registration, check registry record status, fetch DNS records, and resolve IPs and ASNs over RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
+    "longDescription": "Six RDAP and DNS-over-HTTPS tools: whois_lookup_domain (registry record and optional registrar contact detail), whois_check_availability (registered/not_found/unknown record status; no registration eligibility guarantee), whois_get_dns (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR), whois_lookup_ip (netblock CIDRs, org, abuse contact, PTR outcome), whois_lookup_asn (ASN to org/RIR), and whois_get_dossier (domain triage). IANA bootstrap selects the RDAP server; no API keys required. Runs over stdio or Streamable HTTP.",
     "developerName": "cyanheads",
     "category": "developer-tools",
     "capabilities": ["Read"],

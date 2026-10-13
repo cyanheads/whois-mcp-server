@@ -32,6 +32,56 @@ function dossier(records: Partial<Record<DnsRecordType, string[]>>) {
 }
 
 describe('dossier characterization', () => {
+  it.each([
+    [200, true, true, 'Found'],
+    [404, true, false, 'Not found'],
+    [200, false, null, 'Unknown'],
+  ] as const)(
+    'renders registry record status for HTTP %s and coverage %s (#18)',
+    async (status, coverage, registered, label) => {
+      http = upstream({
+        coverage,
+        rdap: () =>
+          status === 404
+            ? new Response(null, { status: 404 })
+            : Response.json({ ldhName: 'example.com' }),
+      });
+      const result = await runToolContract(whoisGetDossier, { domain: 'example.com' });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ registered, rdap_coverage: coverage });
+      expect(
+        textOf(result)
+          .split('\n')
+          .filter((line) => line.startsWith('**Registered (RDAP record):**')),
+      ).toEqual([`**Registered (RDAP record):** ${label}`]);
+      expect(textOf(result)).not.toContain('**Registered:**');
+    },
+  );
+  it('keeps absent RDAP coverage evidence unknown on both surfaces (#20)', async () => {
+    http = upstream({ coverage: false });
+    const result = await runToolContract(whoisGetDossier, { domain: 'example.invalid' });
+    expect(result.structuredContent).toMatchObject({
+      rdap_coverage: false,
+      dnssec_signed: null,
+      privacy_redacted: null,
+    });
+    expect(textOf(result)).toContain('DNSSEC:** Unknown');
+    expect(textOf(result)).toContain('Privacy Redacted:** Unknown');
+  });
+  it('retains registry data when DNS failure status exhausts fallback (#16)', async () => {
+    vi.useFakeTimers();
+    http = upstream({ dns: () => Response.json({ Status: 2 }) });
+    const pending = runToolContract(whoisGetDossier, { domain: 'example.com' });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    expect(result.structuredContent).toMatchObject({
+      registered: true,
+      dns_nxdomain: null,
+      dns_source_error: expect.stringContaining('RCODE 2'),
+    });
+    expect(textOf(result)).toContain('DNS:** Failed');
+    vi.useRealTimers();
+  });
   it.each([0, 1, 3])('preserves %s ordinary TXT values', async (count) => {
     const values = ['first', 'second', 'third'].slice(0, count);
     const result = await dossier({ TXT: values });

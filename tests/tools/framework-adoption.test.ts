@@ -34,7 +34,7 @@ describe('framework recovery and formatting', () => {
     const requests = upstream(new Response(null, { status: 404 }));
     const result = await runToolContract(whoisLookupDomain, { domain: 'example.com' });
     const hint =
-      'The domain is not registered. Use whois_check_availability to confirm availability for registration.';
+      'Use whois_check_availability for record status; a missing record does not establish registration eligibility.';
 
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
@@ -82,13 +82,12 @@ describe('framework recovery and formatting', () => {
 
   it('preserves declared validation recovery on both error surfaces', async () => {
     const result = await runToolContract(whoisLookupDomain, { domain: 'invalid' });
-    const hint =
-      'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".';
+    const hint = 'domain:';
     expect(result.isError).toBe(true);
     expect(result.structuredContent).toMatchObject({
       error: {
-        code: JsonRpcErrorCode.ValidationError,
-        data: { reason: 'invalid_domain', recovery: { hint } },
+        code: JsonRpcErrorCode.InvalidParams,
+        data: { reason: 'invalid_arguments', recovery: { hint: expect.stringContaining(hint) } },
       },
     });
     expect(result.content).toEqual(

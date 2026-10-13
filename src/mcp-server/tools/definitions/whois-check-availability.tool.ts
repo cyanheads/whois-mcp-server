@@ -1,25 +1,30 @@
 /**
- * @fileoverview whois_check_availability tool — domain availability check via RDAP 404 semantics.
+ * @fileoverview whois_check_availability tool — registry record status without an eligibility guarantee.
  * @module mcp-server/tools/definitions/whois-check-availability.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
-import { isValidFqdn } from './_fqdn.js';
+import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
 
 export const whoisCheckAvailability = tool('whois_check_availability', {
-  title: 'Domain Availability Check',
+  title: 'Domain Registration Status',
   description:
-    'Check whether a domain name is registered or available for registration. Returns available: true when ' +
-    'the domain is not registered, available: false with registrar and expiry_date when it is registered, and ' +
-    'available: null with rdap_coverage: false when the TLD has no RDAP coverage. ' +
-    'Designed for "can I register X" and bulk name sweeps. For the full registration record use whois_lookup_domain.',
+    'Check RDAP registry record status: registered, not_found, or unknown when coverage is absent. ' +
+    'available is false for a found record and null otherwise; a registry miss never guarantees registration eligibility. ' +
+    'Known ICANN subdomains are rejected with their registrable parent; private suffixes are not registration boundaries. ' +
+    'For the full record use whois_lookup_domain.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
     domain: z
       .string()
+      .max(253)
+      .regex(
+        REGISTRATION_NAME_PATTERN,
+        'Provide a dot-separated ASCII hostname such as example.com; labels are 1–63 characters, without underscores, whitespace or a root dot.',
+      )
       .describe(
         'Fully qualified domain name to check (e.g., "myfuturename.com"). ' +
           'Must be a valid FQDN — labels separated by dots.',
@@ -28,12 +33,16 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
 
   output: z.object({
     domain: z.string().describe('Normalized domain name checked.'),
+    registration_status: z
+      .enum(['registered', 'not_found', 'unknown'])
+      .describe(
+        'Registry record present, absent, or RDAP coverage unavailable; never registration eligibility.',
+      ),
     available: z
-      .boolean()
+      .literal(false)
       .nullable()
       .describe(
-        'True = available for registration. False = registered. ' +
-          'Null = rdap_coverage is false — cannot determine availability for this TLD.',
+        'False when a registration record exists; otherwise null. A registry miss never establishes availability.',
       ),
     rdap_coverage: z.boolean().describe('True when a RDAP server was found for this TLD.'),
     registrar: z.string().optional().describe('Registrar name when available: false.'),
@@ -42,44 +51,34 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
 
   errors: [
     {
-      reason: 'invalid_domain',
+      reason: 'non_registrable_domain',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'Input is not a valid FQDN.',
+      when: 'An ICANN-recognized suffix identifies the query as a subdomain.',
       recovery:
-        'Provide a valid fully-qualified domain name like "example.com" or "sub.example.org".',
+        'Query the registrable parent named in the error instead; no eligibility is implied.',
+      thrownBy: 'service',
     },
   ],
 
   async handler(input, ctx) {
-    if (!isValidFqdn(input.domain)) {
-      throw ctx.fail('invalid_domain', `"${input.domain}" is not a valid FQDN.`);
-    }
-
     ctx.log.info('RDAP availability check', { domain: input.domain });
 
     const result = await getRdapService().checkAvailability(input.domain, ctx);
 
-    if (result.available === null) {
-      // No RDAP coverage — surface as data, not an error
+    if (result.registration_status !== 'registered') {
       return {
         domain: input.domain.toLowerCase(),
         available: null,
-        rdap_coverage: false,
-      };
-    }
-
-    if (result.available === true) {
-      return {
-        domain: input.domain.toLowerCase(),
-        available: true,
-        rdap_coverage: true,
+        registration_status: result.registration_status,
+        rdap_coverage: result.rdap_coverage,
       };
     }
 
     // Registered
     return {
       domain: result.record.domain,
-      available: false,
+      available: false as const,
+      registration_status: result.registration_status,
       rdap_coverage: true,
       registrar: result.record.registrar,
       expiry_date: result.record.expiry_date,
@@ -90,16 +89,11 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
     const lines: string[] = [];
     lines.push(`# Domain: ${result.domain}`);
 
-    if (result.available === null) {
-      lines.push(`**Available:** Unknown (no RDAP coverage for this TLD)`);
-      lines.push(`**RDAP Coverage:** No`);
-    } else if (result.available === true) {
-      lines.push(`**Available:** Yes — not currently registered`);
-      lines.push(`**RDAP Coverage:** Yes`);
-    } else {
-      lines.push(`**Available:** No — registered`);
-      lines.push(`**RDAP Coverage:** Yes`);
-    }
+    lines.push(`**Registration Status:** ${result.registration_status}`);
+    lines.push(
+      `**Available:** ${result.available === false ? 'No — registered' : 'Unknown — RDAP record absence does not establish eligibility'}`,
+    );
+    lines.push(`**RDAP Coverage:** ${result.rdap_coverage ? 'Yes' : 'No'}`);
 
     if (result.registrar) lines.push(`**Registrar:** ${result.registrar}`);
     if (result.expiry_date) lines.push(`**Expires:** ${result.expiry_date}`);

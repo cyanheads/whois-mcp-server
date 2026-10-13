@@ -52,6 +52,7 @@ const ipRecord: NormalizedIpNetwork = {
   start_address: '8.8.8.0',
   end_address: '8.8.8.255',
   cidr: '8.8.8.0/24',
+  cidrs: ['8.8.8.0/24'],
   ip_version: 'v4',
   name: 'LVLT-GOGL-8-8-8',
   type: 'DIRECT ALLOCATION',
@@ -60,6 +61,7 @@ const ipRecord: NormalizedIpNetwork = {
   abuse_email: 'network-abuse@google.com',
   rdap_source: 'ARIN',
   ptr: null,
+  ptr_status: 'not_found',
 };
 
 // --- tests ------------------------------------------------------------------
@@ -76,7 +78,7 @@ describe('whoisLookupIp', () => {
 
   it('returns IP netblock record with PTR for a public IPv4 address', async () => {
     rdap.lookupIp.mockResolvedValue(ipRecord);
-    doh.ptrLookup.mockResolvedValue('dns.google');
+    doh.ptrLookup.mockResolvedValue({ ptr: 'dns.google', ptr_status: 'found' });
     const ctx = createMockContext({ errors: whoisLookupIp.errors });
     const input = whoisLookupIp.input.parse({ ip: '8.8.8.8' });
     const result = await whoisLookupIp.handler(input, ctx);
@@ -90,7 +92,11 @@ describe('whoisLookupIp', () => {
 
   it('returns ptr: null when PTR lookup fails (best-effort)', async () => {
     rdap.lookupIp.mockResolvedValue(ipRecord);
-    doh.ptrLookup.mockResolvedValue(null);
+    doh.ptrLookup.mockResolvedValue({
+      ptr: null,
+      ptr_status: 'failed',
+      ptr_source_error: 'Resolver unavailable',
+    });
     const ctx = createMockContext({ errors: whoisLookupIp.errors });
     const input = whoisLookupIp.input.parse({ ip: '8.8.8.8' });
     const result = await whoisLookupIp.handler(input, ctx);
@@ -101,7 +107,7 @@ describe('whoisLookupIp', () => {
   // CRITICAL: private/RFC1918 IPs → validation error BEFORE RDAP is called
   it('throws invalid_ip (not private_range) for an invalid IP string', async () => {
     const ctx = createMockContext({ errors: whoisLookupIp.errors });
-    const input = whoisLookupIp.input.parse({ ip: 'not-an-ip' });
+    const input = whoisLookupIp.input.parse({ ip: '2001:::1' });
     await expect(whoisLookupIp.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'invalid_ip' },
     });
@@ -122,9 +128,14 @@ describe('whoisLookupIp', () => {
   });
 
   it('handles sparse upstream IP record (only required fields)', async () => {
-    const sparse: NormalizedIpNetwork = { ip: '1.1.1.1', ptr: null };
+    const sparse: NormalizedIpNetwork = {
+      ip: '1.1.1.1',
+      ptr: null,
+      cidrs: [],
+      ptr_status: 'not_found',
+    };
     rdap.lookupIp.mockResolvedValue(sparse);
-    doh.ptrLookup.mockResolvedValue(null);
+    doh.ptrLookup.mockResolvedValue({ ptr: null, ptr_status: 'not_found' });
     const ctx = createMockContext({ errors: whoisLookupIp.errors });
     const input = whoisLookupIp.input.parse({ ip: '1.1.1.1' });
     const result = await whoisLookupIp.handler(input, ctx);

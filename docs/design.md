@@ -6,9 +6,9 @@
 
 | Name | Description | Key Inputs | Annotations |
 |:-----|:------------|:-----------|:------------|
-| `whois_lookup_domain` | Look up a domain's registration record — registrar, created/expiry dates, nameservers, EPP status codes, DNSSEC flag, and registrant org (where not privacy-redacted). RDAP-first via IANA auto-bootstrap. One normalized shape regardless of TLD. When the TLD has no RDAP coverage, throws `rdap_no_coverage`. | `domain: string` (valid FQDN) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
-| `whois_check_availability` | Check whether a domain name is registered or available for registration. RDAP 404 = available (modeled as data: `available: true`, not an error). Returns `available: false` with `registrar` and `expiry_date` when registered. When the TLD has no RDAP coverage, returns `available: null` with `rdap_coverage: false` — cannot determine availability. Designed for "can I register X" and bulk name sweeps. | `domain: string` (valid FQDN) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
-| `whois_get_dns` | Fetch DNS records for a domain via DNS-over-HTTPS (Cloudflare 1.1.1.1 primary, Google 8.8.8.8 fallback). Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR. Returns records with TTLs and the resolving source. NXDOMAIN is returned as `nxdomain: true` in the result, not as an error. | `domain: string` (valid FQDN), `types: z.enum(["A","AAAA","MX","TXT","NS","CNAME","SOA","CAA","PTR"])[]` (default: `["A","AAAA","MX","TXT","NS"]`) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
+| `whois_lookup_domain` | Registry registration record; nullable DNSSEC/privacy evidence and public registrant org. Optional registrar contact detail remains nested without overriding registry authority. No coverage throws `rdap_no_coverage`; a missing registry object throws `domain_not_found`. | `domain: string` (hostname grammar), `include_registrar: boolean = false` | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
+| `whois_check_availability` | Registry record status: registered/false, not_found/null, or unknown/null for absent coverage. No registration eligibility guarantee. Known ICANN subdomains are rejected with a parent hint; private suffixes are excluded from registration-boundary recognition. | `domain: string` (hostname grammar) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
+| `whois_get_dns` | DNS records with TTLs and ordered query provenance. NOERROR/NODATA and NXDOMAIN are data; failure codes and truncated replies are errors after fallback. Complete literal TXT output. | `domain: string` (ASCII DNS owner, underscores and one root dot), nonempty `types[]` (default A/AAAA/MX/TXT/NS) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
 | `whois_lookup_ip` | Look up an IP/CIDR base address via RIR RDAP. Returns netblock, org, country, CIDR, abuse contact, and best-effort PTR. Explicit excluded ranges return `private_range`; other special-use addresses remain eligible for RDAP. IPv4-mapped IPv6 uses the embedded IPv4 for policy, routing, and PTR; other IPv6 uses 32 reversed nibbles. | `ip: string` (complete IPv4/IPv6; optional single decimal CIDR prefix within 0–32/0–128; no whitespace, zone IDs, or brackets) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
 | `whois_lookup_asn` | Resolve an ASN to org, country, and RIR. Validate the whole trimmed decimal token in 1–4294967295 before lookup. | `asn: string` (optional case-insensitive `AS` prefix, whitespace after `AS`, and leading `+`; no whitespace inside digits or after `+`) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
 | `whois_get_dossier` | One-call domain triage: registration + DNS (A, MX, NS, TXT) in parallel, normalized into a single record with factual signals — domain age in days, privacy-redacted flag, registrar name, NS provider inferred from NS records, mail provider inferred from MX. No synthesized scores. Partial results surfaced when one leg fails (registration or DNS marked with `source_error`); both-legs-fail throws `ServiceUnavailable`. | `domain: string` (valid FQDN) | `readOnlyHint: true, idempotentHint: true, openWorldHint: true` |
@@ -36,7 +36,7 @@ whois-mcp-server is a multi-source domain and IP intelligence server that normal
 ## Requirements
 
 - Domain registration lookup via RDAP with IANA bootstrap (auto-selects per-TLD RDAP server)
-- Domain availability check (RDAP 404 = domain not registered = available)
+- Registry record status without asserting registration eligibility
 - DNS record fetching via DNS-over-HTTPS for A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR record types
 - IP/CIDR → netblock, org, abuse contact via RIR RDAP (IANA bootstrap for IP space)
 - ASN resolution via RIR RDAP
@@ -52,8 +52,8 @@ whois-mcp-server is a multi-source domain and IP intelligence server that normal
 
 | Service | Wraps | Used By |
 |:--------|:------|:--------|
-| `rdap-service` | RDAP (IANA bootstrap JSON + per-TLD/RIR RDAP endpoints) | `whois_lookup_domain`, `whois_check_availability`, `whois_lookup_ip`, `whois_lookup_asn` |
-| `doh-service` | Cloudflare DoH (`https://cloudflare-dns.com/dns-query`) + Google DoH fallback (`https://dns.google/resolve`) | `whois_get_dns`, `whois_lookup_ip` (PTR), `whois_get_dossier` |
+| `rdap-service` | RDAP (IANA bootstrap JSON + per-TLD/RIR RDAP endpoints) | `whois_lookup_domain`, `whois_check_availability`, `whois_lookup_ip`, `whois_lookup_asn`, `whois_get_dossier` |
+| `doh-service` | Cloudflare DoH (`https://cloudflare-dns.com/dns-query`) + NextDNS DoH (`https://dns.nextdns.io`) for CAA and as fallback | `whois_get_dns`, `whois_lookup_ip` (PTR), `whois_get_dossier` |
 
 Port-43 WHOIS deferred — see Design Decisions.
 
@@ -76,7 +76,7 @@ All standard framework env vars apply (`MCP_LOG_LEVEL`, transport, auth, OTel). 
 
 1. Config — `src/config/server-config.ts` (timeouts, retries)
 2. RDAP service — IANA bootstrap cache + domain/IP/ASN lookup with retry
-3. DoH service — A/AAAA/MX/TXT/NS/CNAME/SOA/CAA/PTR resolution with Google fallback
+3. DoH service — A/AAAA/MX/TXT/NS/CNAME/SOA/CAA/PTR resolution with NextDNS fallback
 4. `whois_lookup_domain` — RDAP domain; parse vcard + events + entities into normalized schema
 5. `whois_check_availability` — thin wrapper on RDAP 404 behavior
 6. `whois_get_dns` — DoH multi-type fetch; parallel per-type requests
@@ -97,22 +97,24 @@ Typed error contracts for each tool's known domain failure modes. Baseline codes
 | reason | code | when |
 |:-------|:-----|:-----|
 | `rdap_no_coverage` | `NotFound` | TLD has no RDAP server in IANA bootstrap — cannot perform lookup |
-| `domain_not_found` | `NotFound` | RDAP server returned 404 — domain not registered (may want `whois_check_availability` instead) |
-| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
+| `domain_not_found` | `NotFound` | RDAP server returned 404 — registry object absent, without an eligibility conclusion |
+| `invalid_arguments` | `InvalidParams` | Input does not match serialized registration-name syntax |
 
 ### `whois_check_availability`
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
+| `invalid_arguments` | `InvalidParams` | Input does not match serialized registration-name syntax |
+| `non_registrable_domain` | `ValidationError` | ICANN-recognized subdomain, with exact registrable-parent hint |
 
-Note: RDAP 404 is **not** an error for this tool — it is the primary availability signal (`available: true`). Missing RDAP coverage returns `available: null` with `rdap_coverage: false`, also as data.
+RDAP 404 is record-status data (`registration_status: not_found`, `available: null`). Missing coverage yields `unknown/null` with `rdap_coverage: false`. Neither establishes registration eligibility.
 
 ### `whois_get_dns`
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
+| `invalid_arguments` | `InvalidParams` | Invalid ASCII DNS owner syntax, label/name length, or empty type list |
+| `dns_response_failed` | `ServiceUnavailable` | Failure RCODE or TC after retries/fallback; carries type, resolver, status, truncation and recovery |
 
 Note: NXDOMAIN (`Status: 3`) is **not** an error — returned as `nxdomain: true` in the result.
 
@@ -123,6 +125,8 @@ Note: NXDOMAIN (`Status: 3`) is **not** an error — returned as `nxdomain: true
 | `invalid_ip` | `ValidationError` | Input is not a complete valid IPv4, IPv6, or CIDR token |
 | `private_range` | `ValidationError` | The numeric address falls within the explicit exclusion policy below |
 | `ip_not_found` | `NotFound` | RIR RDAP returned 404 — no netblock record for this address |
+| `ip_no_rdap_route` | `NotFound` | Successful IANA bootstrap has no covering route; explicitly not retryable |
+| `invalid_arguments` | `InvalidParams` | IP/CIDR input fails conservative serialized syntax |
 
 ### `whois_lookup_asn`
 
@@ -130,12 +134,13 @@ Note: NXDOMAIN (`Status: 3`) is **not** an error — returned as `nxdomain: true
 |:-------|:-----|:-----|
 | `invalid_asn` | `ValidationError` | The whole trimmed token is not a decimal ASN in 1–4294967295 with the supported optional prefix/sign |
 | `asn_not_found` | `NotFound` | RDAP returned 404 — ASN not found in any RIR |
+| `invalid_arguments` | `InvalidParams` | ASN input fails serialized spelling grammar |
 
 ### `whois_get_dossier`
 
 | reason | code | when |
 |:-------|:-----|:-----|
-| `invalid_domain` | `ValidationError` | Input is not a valid FQDN |
+| `invalid_arguments` | `InvalidParams` | Input does not match serialized registration-name syntax |
 | `both_legs_failed` | `ServiceUnavailable` | Both RDAP and DoH legs failed — no data returned |
 
 Note: single-leg failures are partial results (`source_error` on the failed leg), not thrown errors.
@@ -148,7 +153,7 @@ Note: single-leg failures are partial results (`source_error` on the failed leg)
 
 | Noun | Operations | RDAP Path | DoH Path |
 |:-----|:-----------|:----------|:---------|
-| Domain | lookup, availability | `GET https://<tld-rdap>/domain/<name>` | — |
+| Domain | lookup, record status | `GET https://<tld-rdap>/domain/<name>` | — |
 | DNS Records | query by type | — | `GET https://cloudflare-dns.com/dns-query?name=<n>&type=<t>` |
 | IP Network | lookup | `GET https://<rir-rdap>/ip/<addr>` | PTR: `GET …?name=<reversed>.in-addr.arpa&type=PTR` |
 | ASN | lookup | `GET https://<rir-rdap>/autnum/<num>` | — |
@@ -168,7 +173,7 @@ Note: single-leg failures are partial results (`source_error` on the failed leg)
 | 1b | DoH A + MX + NS + TXT in parallel | DNS resolution state |
 | 2 | Assemble normalized dossier from `Promise.allSettled` | Merge, compute factual signals (age, privacy flag, inferred providers) |
 
-Both legs run in parallel. A failed RDAP leg → dossier marks registration as `unavailable` with `source_error`. A failed DoH leg → dossier marks DNS as `unavailable`. At least one leg must succeed; if both fail, throw `ServiceUnavailable`.
+Both legs run in parallel. A failed RDAP leg sets `rdap_coverage` and `registered` to null with `rdap_source_error`. A failed DoH leg sets `dns_nxdomain` to null with `dns_source_error`. A registry 404 remains record-absence data; if both legs fail operationally, throw `ServiceUnavailable`.
 
 ### `whois_lookup_ip` — 2 sequential steps
 
@@ -177,11 +182,31 @@ Both legs run in parallel. A failed RDAP leg → dossier marks registration as `
 | 1 | RDAP IP lookup (IANA IP bootstrap → RIR RDAP server) | Netblock, org, CIDR, abuse contact |
 | 2 | DoH PTR (`<reversed>.in-addr.arpa`) | Reverse DNS hostname |
 
-PTR is best-effort — failure produces `ptr: null`, not an error.
+PTR is best-effort: `found` with hostname, `not_found` with null for successful absence, or `failed` with null and `ptr_source_error`. Cancellation propagates. The owner-matched CNAME chain allows at most five transitions under one total DNS deadline; unrelated owners are ignored.
 
 ---
 
 ## Design Decisions
+
+### Registration status and unknown evidence
+
+RDAP object absence cannot establish registration eligibility: reserved names and registry policy are outside this source. Keep the tool name, but never emit `available: true`. ICANN-only suffix recognition rejects known subdomains without querying their parent; an unrecognized suffix retains IANA handling. Private suffixes are hosting boundaries, not registry boundaries.
+
+Registrant organization comes from jCard `org`, not personal `fn`. Preserve public org alongside explicit contact redaction, and omit placeholders. Privacy is `true` only with registrant-scoped redaction entries, remarks or known exact placeholders; otherwise it is unknown. DNSSEC preserves only explicit `secureDNS.delegationSigned`; missing fields, no coverage and failed legs stay null rather than implying false.
+
+### Optional registrar authority
+
+`include_registrar` defaults false to preserve the registry-only latency and dependency path. When enabled, follow one related RDAP link with no referral retries or recursion, at most five destination-checked redirects, and a total `RDAP_TIMEOUT_MS` deadline. The initial URL must be HTTPS without credentials; literal, mapped and DNS-resolved non-global targets are rejected. These checks are best-effort against DNS rebinding, not pinned-connection isolation. Matching-domain contact evidence stays in `registrar_detail`; registry dates, status, nameservers and DNSSEC are never merged with it. Failed optional detail retains the primary record, while caller cancellation propagates.
+
+### Complete allocation and DNS data
+
+Preserve every provider CIDR in order; `cidr` is populated only for one component so it never misrepresents part of an allocation as the whole. Missing extensions produce no invented prefix.
+
+Only untruncated NOERROR and NXDOMAIN replies are consumable DNS data. A resolver failure can use the fallback, but CAA never repeats the same fallback resolver. TXT values use fences longer than any embedded backtick run, retaining whitespace, duplicates and empty values. Fences preserve presentation, not a prompt-injection boundary.
+
+### Serialized identifier grammar
+
+Registration names use ASCII hostname labels with 63/253-character bounds; DNS names separately allow underscore labels and one terminal root dot with the same normalized bounds. Shared patterns drive runtime syntax and advertised JSON Schema. ASN and IP/CIDR patterns are conservative and impose no arbitrary length ceiling: zero-padding and accepted whitespace survive. Syntax rejections use `InvalidParams`/`invalid_arguments`; complete address parsing, prefix ranges, numeric ASN bounds and exclusion policy remain semantic typed errors.
 
 ### IP lookup exclusions
 
@@ -207,11 +232,11 @@ CIDR queries look up the supplied base address, without masking it to a network 
 
 **Reasoning:** `rdap.org` is a convenience proxy that handles bootstrap internally but introduces an intermediary. Direct IANA bootstrap + per-registry RDAP is the canonical path and gives control over timeouts and retries per hop. Cache the IANA bootstrap JSON (TTL: 24h) to avoid a bootstrap lookup on every domain query.
 
-### CAA record format — Cloudflare returns raw hex, Google returns human-readable
+### CAA record format and the fallback resolver
 
-**Decision:** Use Cloudflare as primary DoH; fall back to Google for CAA records specifically, or decode the hex wire format in the service layer.
+**Decision:** Cloudflare is the primary DoH resolver. NextDNS (`https://dns.nextdns.io`) answers CAA queries and is the fallback for every other type.
 
-**Observed:** Cloudflare DoH returns CAA records as raw hex wire format (`\# 19 00 05 69 73 73 75 65...`). Google DoH returns human-readable text (`0 issue "letsencrypt.org"`). The service layer must decode the Cloudflare hex format or prefer Google DoH for CAA queries. Implementation will use Google for CAA and Cloudflare for all others.
+**Reasoning:** Cloudflare DoH returns CAA records as raw hex wire format (`\# 19 00 05 69 73 73 75 65...`). NextDNS speaks the same `application/dns-json` format and returns CAA data as human-readable text (`0 issue "letsencrypt.org"`), so no wire-format decoder is needed. Google DoH (`dns.google`) filled this role first, but Google's terms prohibit using it as a relay for third-party queries.
 
 ### No resources or prompts
 
@@ -229,9 +254,9 @@ CIDR queries look up the supplied base address, without masking it to a network 
 
 ## Known Limitations
 
-- **Privacy redaction is the norm (GDPR/ICANN 2018+).** Registrant contact info is redacted for most gTLD registrations. The server surfaces `registrant_redacted: true` explicitly rather than implying missing data. Some ccTLD registrars still expose full registrant data.
+- **Privacy evidence varies.** Explicit registrant redaction is surfaced as true; absent evidence remains null. A public organization can coexist with redacted contact fields, and missing fields alone prove neither redaction nor its absence.
 - **RDAP coverage gaps.** Some ccTLDs lack RDAP entirely. The server returns `rdap_coverage: false` in these cases; WHOIS-43 fallback is deferred (see Design Decisions).
-- **Rate limits vary by registry.** Verisign (`.com`/`.net`) is liberal; some ccTLD registries are strict. The service layer applies per-domain backoff, but sustained bulk lookups may hit registry limits. No rate-limit advisory is surfaced upward — the `ServiceUnavailable` error is the signal.
+- **Rate limits vary by registry.** The service layer retries transient failures with backoff, but sustained bulk lookups may hit registry limits. Exhausted HTTP 429 responses surface `RateLimited` with retry metadata.
 - **RDAP data freshness.** RDAP servers have their own update lag vs. the authoritative registry database. The `last update of RDAP database` event from the response is included in output for transparency.
 - **IPv6 PTR reverse DNS** uses `.ip6.arpa` format. Handled by the service layer.
 
@@ -265,7 +290,7 @@ Confirmed from live probe (`AS15169`):
 
 ### RDAP 404 semantics
 
-A `404` response from the TLD's RDAP server means the domain is **not registered** (available). This is the RDAP spec behavior — no record = not registered. The `whois_check_availability` tool exploits this as the primary availability signal.
+A `404` response establishes that the queried RDAP object was not found. It does not establish registration eligibility. `whois_check_availability` returns `not_found` and `available: null`; a found object returns `registered` and `available: false`.
 
 ### DoH response shape (Cloudflare)
 
@@ -276,13 +301,13 @@ A `404` response from the TLD's RDAP server means the domain is **not registered
 - `Authority[]`: present on NXDOMAIN/NOERROR-with-no-records (SOA of the zone)
 - DNS type numbers: A=1, NS=2, CNAME=5, SOA=6, PTR=12, MX=15, TXT=16, AAAA=28, CAA=257
 
-**CAA quirk:** Cloudflare returns CAA `data` as raw hex wire format (`\# 19 00 05 ...`). Google DoH returns human-readable (`0 issue "letsencrypt.org"`). Use Google DoH for CAA queries.
+**CAA quirk:** Cloudflare returns CAA `data` as raw hex wire format (`\# 19 00 05 ...`). NextDNS returns human-readable (`0 issue "letsencrypt.org"`), so CAA queries go to NextDNS.
 
 **PTR (reverse DNS):** construct query name as `<reversed-octets>.in-addr.arpa` (IPv4) or `<nibble-reversed>.ip6.arpa` (IPv6).
 
 ### DoH rate limits
 
-Cloudflare and Google DoH are public resolvers with no documented rate limits for reasonable use. The framework's `withRetry` handles transient failures.
+Cloudflare DoH is a public resolver with no documented rate limit for reasonable use; NextDNS carries only CAA queries and fallback traffic. The framework's `withRetry` handles transient failures.
 
 ### RDAP rate limits
 

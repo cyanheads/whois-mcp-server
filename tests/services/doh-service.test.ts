@@ -5,6 +5,7 @@
 
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getServerConfig } from '@/config/server-config.js';
 import { whoisGetDns } from '@/mcp-server/tools/definitions/whois-get-dns.tool.js';
 import { DohService } from '@/services/doh/doh-service.js';
 import type { DnsRecordType } from '@/services/doh/types.js';
@@ -18,6 +19,250 @@ afterEach(() => {
 });
 
 describe('DoH characterization', () => {
+  it('keeps one total deadline across successive PTR aliases (#22)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(
+        () => controller.abort(new DOMException('Total deadline exceeded', 'TimeoutError')),
+        ms,
+      );
+      return controller.signal;
+    });
+    let calls = 0;
+    const httpBoundary = await import('@cyanheads/mcp-ts-core/testing');
+    const original = httpBoundary.createFetchMock([
+      {
+        match: (request) => new URL(request.url).hostname === 'cloudflare-dns.com',
+        respond: (request) =>
+          new Promise<Response>((resolve, reject) => {
+            calls++;
+            const timer = setTimeout(
+              () =>
+                resolve(
+                  Response.json({
+                    Status: 0,
+                    Answer: [
+                      {
+                        type: 5,
+                        name: new URL(request.url).searchParams.get('name'),
+                        TTL: 60,
+                        data: `${calls}.alias.example.`,
+                      },
+                    ],
+                  }),
+                ),
+              getServerConfig().dohTimeoutMs / 2,
+            );
+            request.signal.addEventListener(
+              'abort',
+              () => {
+                clearTimeout(timer);
+                reject(request.signal.reason);
+              },
+              { once: true },
+            );
+          }),
+      },
+    ]);
+    original.install();
+    try {
+      const pending = new DohService().ptrLookup('1.2.0.192.in-addr.arpa', createMockContext());
+      await vi.advanceTimersByTimeAsync(getServerConfig().dohTimeoutMs);
+      expect(await pending).toMatchObject({
+        ptr: null,
+        ptr_status: 'failed',
+        ptr_source_error: expect.stringMatching(/deadline|timeout/i),
+      });
+      expect(calls).toBe(2);
+      expect(original.calls).toHaveLength(2);
+    } finally {
+      original.restore();
+    }
+  });
+  it.each(['found', 'loop', 'limit'] as const)(
+    'walks several alias-only replies to %s (#22)',
+    async (outcome) => {
+      http = upstream({
+        dns: (_type, url) => {
+          const owner = url.searchParams.get('name')!;
+          const hop = owner === '1.2.0.192.in-addr.arpa' ? 0 : Number(owner.split('.')[0]);
+          const found = outcome === 'found' && hop === 3;
+          return Response.json({
+            Status: 0,
+            Answer: [
+              {
+                type: found ? 12 : 5,
+                name: `${owner.toUpperCase()}.`,
+                TTL: 60,
+                data: found
+                  ? 'ACTUAL.EXAMPLE.'
+                  : outcome === 'loop' && hop === 2
+                    ? '1.alias.example.'
+                    : `${hop + 1}.alias.example.`,
+              },
+            ],
+          });
+        },
+      });
+      const result = await new DohService().ptrLookup(
+        '1.2.0.192.in-addr.arpa',
+        createMockContext(),
+      );
+      expect(result).toMatchObject({
+        ptr: outcome === 'found' ? 'actual.example' : null,
+        ptr_status: outcome === 'found' ? 'found' : 'failed',
+      });
+      expect(http.calls).toHaveLength(outcome === 'found' ? 4 : outcome === 'loop' ? 3 : 6);
+      if (result.ptr_status === 'failed') expect(result.ptr_source_error).toContain('limit');
+    },
+  );
+  it('ignores unrelated aliases and PTR owners (#22)', async () => {
+    http = upstream({
+      dns: () =>
+        Response.json({
+          Status: 0,
+          Answer: [
+            { type: 5, name: 'unrelated.example.', TTL: 60, data: 'private.example.' },
+            { type: 12, name: 'unrelated.example.', TTL: 60, data: 'wrong.example.' },
+          ],
+        }),
+    });
+    expect(await new DohService().ptrLookup('1.2.0.192.in-addr.arpa', createMockContext())).toEqual(
+      { ptr: null, ptr_status: 'not_found' },
+    );
+    expect(http.calls).toHaveLength(1);
+  });
+  it('stops retries and fallback after caller abort (#16/#22)', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const started = Promise.withResolvers<void>();
+    http = upstream({
+      dns: () => {
+        started.resolve();
+        return new Response(null, { status: 503 });
+      },
+    });
+    const pending = runToolContract(
+      whoisGetDns,
+      { domain: 'example.com', types: ['A'] },
+      { context: { signal: controller.signal } },
+    );
+    await started.promise;
+    controller.abort();
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    expect(result.structuredContent).toMatchObject({ error: { code: -32011 } });
+    expect(http.calls).toHaveLength(1);
+    expect(textOf(result)).toMatch(/abort|cancel/i);
+  });
+  it('does not turn an aborted PTR call into partial success (#22)', async () => {
+    const controller = new AbortController();
+    http = upstream({
+      dns: () => {
+        controller.abort();
+        return Response.json({ Status: 0 });
+      },
+    });
+    await expect(
+      new DohService().ptrLookup(
+        '1.2.0.192.in-addr.arpa',
+        createMockContext({ signal: controller.signal }),
+      ),
+    ).rejects.toThrow();
+    expect(http.calls).toHaveLength(1);
+  });
+  it.each(['_dmarc.github.com', '_netblocks.google.com', 'github.com.'])(
+    'accepts DNS owner %s (#17)',
+    async (domain) => {
+      http = upstream();
+      const result = await runToolContract(whoisGetDns, { domain, types: ['TXT'] });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ domain: domain.replace(/\.$/, '') });
+      expect(new URL(http.calls[0]!.request.url).searchParams.get('name')).toBe(
+        domain.replace(/\.$/, ''),
+      );
+    },
+  );
+
+  it('renders each complete TXT literal in a sized fence (#23)', async () => {
+    const values = [
+      '',
+      '  literal ` <tag> **bold** [link](https://example.com) | \\  ',
+      '```\nend',
+      'duplicate',
+      'duplicate',
+    ];
+    http = upstream({
+      dns: () =>
+        Response.json({
+          Status: 0,
+          Answer: values.map((data) => ({ type: 16, name: 'example.com.', TTL: 60, data })),
+        }),
+    });
+    const result = await runToolContract(whoisGetDns, { domain: 'example.com', types: ['TXT'] });
+    const literals = [...textOf(result).matchAll(/^(`{3,})\n([\s\S]*?)\n\1$/gm)].map(
+      (match) => match[2],
+    );
+    expect(literals).toEqual(values);
+    expect(result.structuredContent).toMatchObject({ records: values.map((data) => ({ data })) });
+    expect(textOf(result)).toContain('TTL: 60s');
+  });
+
+  it.each([2, 5])('rejects exhausted DNS status %s with recovery (#16)', async (Status) => {
+    vi.useFakeTimers();
+    http = upstream({ dns: () => Response.json({ Status }) });
+    const pending = runToolContract(whoisGetDns, { domain: 'example.com', types: ['A'] });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        data: {
+          reason: 'dns_response_failed',
+          type: 'A',
+          resolver: 'nextdns',
+          status: Status,
+          recovery: { hint: expect.any(String) },
+        },
+      },
+    });
+    expect(textOf(result)).toContain('dns_response_failed');
+    expect(textOf(result)).toContain('Recovery:');
+  });
+
+  it('rejects truncated answers rather than consuming them (#16)', async () => {
+    vi.useFakeTimers();
+    http = upstream({ dns: () => Response.json({ Status: 0, TC: true }) });
+    const pending = runToolContract(whoisGetDns, { domain: 'example.com', types: ['A'] });
+    await vi.runAllTimersAsync();
+    expect((await pending).structuredContent).toMatchObject({
+      error: {
+        data: {
+          reason: 'dns_response_failed',
+          truncated: true,
+        },
+      },
+    });
+  });
+
+  it('selects only a reachable PTR after a CNAME (#22)', async () => {
+    http = upstream({
+      dns: () =>
+        Response.json({
+          Status: 0,
+          Answer: [
+            { type: 5, name: '1.2.0.192.in-addr.arpa.', TTL: 60, data: '1.range.example.' },
+            { type: 12, name: 'unrelated.example.', TTL: 60, data: 'wrong.example.' },
+            { type: 12, name: '1.range.example.', TTL: 60, data: 'actual-host.example.' },
+          ],
+        }),
+    });
+    expect(await new DohService().ptrLookup('1.2.0.192.in-addr.arpa', createMockContext())).toEqual(
+      { ptr: 'actual-host.example', ptr_status: 'found' },
+    );
+  });
+
   it('uses Cloudflare primary and NextDNS-only CAA with the legacy aggregate', async () => {
     http = upstream();
     const result = await new DohService().lookup('example.com', ['A', 'CAA'], createMockContext());
@@ -53,7 +298,16 @@ describe('DoH characterization', () => {
       nxdomain: Status === 3,
     });
     expect(textOf(result)).toContain('cloudflare');
-    expect(textOf(result)).toContain(Status === 3 ? 'does not exist' : 'No records');
+    expect(
+      textOf(result)
+        .split('\n')
+        .filter((line) => line.startsWith('**NXDOMAIN:**')),
+    ).toEqual([
+      Status === 3
+        ? '**NXDOMAIN:** Yes — at least one query returned NXDOMAIN'
+        : '**NXDOMAIN:** No',
+    ]);
+    if (Status === 0) expect(textOf(result)).toContain('No records');
   });
 
   it('omitting types dispatches exactly the five defaults', async () => {
@@ -202,7 +456,7 @@ describe('DoH retry and terminal paths', () => {
       expect(result.isError).toBe(true);
       expect(result.structuredContent).not.toHaveProperty('source');
       expect(result.structuredContent).not.toHaveProperty('query_sources');
-      expect(http.calls).toHaveLength(2);
+      expect(http.calls).toHaveLength(type === 'CAA' ? 1 : 2);
       if (type === 'CAA')
         expect(
           http.calls.every((call) => new URL(call.request.url).hostname === 'dns.nextdns.io'),

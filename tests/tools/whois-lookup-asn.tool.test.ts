@@ -79,14 +79,14 @@ describe('whoisLookupAsn', () => {
     expect(result.asn).toBe('AS15169');
   });
 
-  it('propagates invalid_asn error from service for non-numeric input', async () => {
+  it('propagates invalid_asn error from service for an out-of-range number', async () => {
     const { McpError, JsonRpcErrorCode } = await import('@cyanheads/mcp-ts-core/errors');
     const invalidErr = new McpError(JsonRpcErrorCode.ValidationError, 'invalid ASN', {
       reason: 'invalid_asn',
     });
     rdap.lookupAsn.mockRejectedValue(invalidErr);
     const ctx = createMockContext({ errors: whoisLookupAsn.errors });
-    const input = whoisLookupAsn.input.parse({ asn: 'NOTANASN' });
+    const input = whoisLookupAsn.input.parse({ asn: '0' });
     await expect(whoisLookupAsn.handler(input, ctx)).rejects.toMatchObject({
       data: { reason: 'invalid_asn' },
     });

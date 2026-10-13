@@ -2,9 +2,9 @@
 
 **Server:** whois-mcp-server
 **Version:** 0.1.6
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.10`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.1.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -52,7 +52,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 
 export const whoisLookupDomain = tool('whois_lookup_domain', {
-  description: 'Look up a domain\'s registration record — registrar, created/expiry dates, nameservers, EPP status codes, DNSSEC flag, and registrant org (where not privacy-redacted). RDAP-first via IANA auto-bootstrap.',
+  description: 'Look up registry registration data with provider DNSSEC and privacy evidence. Public registrant org is independent of contact redaction.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
   input: z.object({
     domain: z.string().describe('Domain name to look up (e.g. "github.com")'),
@@ -67,8 +67,8 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
       when: 'TLD has no RDAP server in IANA bootstrap',
       recovery: 'Use whois_check_availability instead or try a different TLD.' },
     { reason: 'domain_not_found', code: JsonRpcErrorCode.NotFound,
-      when: 'RDAP returned 404 — domain not registered',
-      recovery: 'Use whois_check_availability to confirm the domain is available.' },
+      when: 'RDAP returned 404 — no registry object found',
+      recovery: 'Use whois_check_availability for record status; no eligibility guarantee is implied.' },
   ],
   async handler(input, ctx) {
     const rdap = getRdapService();
@@ -109,6 +109,8 @@ export function getServerConfig() {
 `parseEnvConfig` maps Zod schema paths → env var names so errors name the variable (`RDAP_TIMEOUT_MS`) not the path (`rdapTimeoutMs`). Throws `ConfigurationError`, which the framework prints as a clean startup banner. An empty string and a whole-value unsubstituted `${…}` placeholder read as unset, so an optional field stays `undefined` and a defaulted field takes its default.
 
 For env booleans use `z.stringbool()`, never `z.coerce.boolean()` — `Boolean("false")` is `true`, so a coerced flag can't be disabled through the environment. `z.stringbool()` parses `true/false/1/0/yes/no/on/off` and rejects anything else, so `=false` actually disables.
+
+Call `getServerConfig()` in `createApp()`'s `setup()` before initializing services so invalid environment values fail startup before the transport binds.
 
 ### Server identity and instructions
 
@@ -225,15 +227,25 @@ src/
   mcp-server/
     tools/definitions/
       whois-lookup-domain.tool.ts       # Domain registration record via RDAP
-      whois-check-availability.tool.ts  # Domain availability check (RDAP 404 = available)
+      whois-check-availability.tool.ts  # Registry record status; no eligibility guarantee
       whois-get-dns.tool.ts             # DNS records via DoH (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR)
       whois-lookup-ip.tool.ts           # IP/CIDR netblock, org, abuse contact via RIR RDAP
       whois-lookup-asn.tool.ts          # ASN to org/RIR resolution via RIR RDAP
       whois-get-dossier.tool.ts         # One-call domain triage — registration + DNS in parallel
-      _fqdn.ts                          # Shared FQDN validation helper
+      _fqdn.ts                          # Shared registration/DNS/ASN/IP syntax patterns
 ```
 
 ---
+
+## Lookup Contracts
+
+Registry object absence never establishes registration eligibility. `whois_check_availability` reports `registration_status: registered | not_found | unknown`, with `available: false` only for a found record and null otherwise. ICANN-only suffix recognition rejects known subdomains without silently querying their parent; private suffixes do not create registry boundaries.
+
+Registrant org comes from jCard `org`; personal `fn` is not organization data. Explicit registrant redaction and missing evidence yield true and null respectively; public org survives independently. DNSSEC preserves provider `delegationSigned`, with missing/no-coverage evidence null. Domain and dossier formatters render unknown states explicitly. Optional `include_registrar` detail stays nested, never overriding registry authority; one referral, no retry/recursion, five guarded redirects and one total RDAP deadline. Destination checks are best-effort against DNS rebinding.
+
+DNS owner syntax separately permits underscores and one normalized root dot. Failure RCODEs and truncated replies never become empty successes; CAA does not repeat NextDNS as fallback, and cancellation starts no further requests. TXT uses complete literal fences, not an injection boundary. PTR selects only reachable owner-matched records, allows five aliases under one DNS deadline, and discloses found/not_found/failed plus failure detail. IP output retains all ordered `cidrs`, with scalar `cidr` only for one component. A missing IANA route is non-retryable `ip_no_rdap_route`; bootstrap fetch failure stays operational.
+
+Serialized patterns are the syntax gate (`InvalidParams`/`invalid_arguments`); IP/ASN semantic parsing and exclusions retain typed reasons. Preserve existing ASN whitespace/plus/zero-padding and CIDR padding without arbitrary input ceilings. See `docs/design.md` for the domain decisions.
 
 ## Naming
 
@@ -364,7 +376,7 @@ security: false                            # optional — true ONLY for a source
 
 ## Publishing
 
-**Every release goes through a release PR, straight-through** — `git-wrapup`'s "Release PR mode", mode `straight-through`. One run: `git-wrapup` lands the commit stack on `release/<version>`, pushes it, and opens the PR (title = the release commit subject, body = the changelog entry plus a gates section); `release-and-publish` then fast-forwards `main` locally with `git merge --ff-only`, creates the tag on `main`'s tip, pushes `main` and the tag, deletes the branch, and publishes. A caller's brief may run a given release as `gated` instead — a `release-pr-review` pass on the open PR before `release-and-publish`. **Never merge through the GitHub UI or `gh pr merge`**: squash and rebase-merge are disabled in the repo settings because both rewrite the stack (rebase-merge also strips the SSH signatures), and a merge commit breaks the linear history.
+**Every release goes through a release PR, straight-through** — `git-wrapup`'s "Release PR mode", mode `straight-through`. One run: `git-wrapup` lands the commit stack on `release/<version>`, pushes it, and opens the PR (title = the release commit subject, body = the release digest: theme line, `## Changes`, `## Gates`, changelog link last); `release-and-publish` then fast-forwards `main` locally with `git merge --ff-only`, creates the tag on `main`'s tip, pushes `main` and the tag, deletes the branch, and publishes. A caller's brief may run a given release as `gated` instead — a `release-pr-review` pass on the open PR before `release-and-publish`. **Never merge through the GitHub UI or `gh pr merge`**: squash and rebase-merge are disabled in the repo settings because both rewrite the stack (rebase-merge also strips the SSH signatures), and a merge commit breaks the linear history.
 
 ---
 
