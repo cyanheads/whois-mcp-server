@@ -1,6 +1,6 @@
 # whois-mcp-server - Directory Structure
 
-Generated on: 2026-09-30 09:37:59
+Generated on: 2026-10-13 11:51:21
 
 ```text
 whois-mcp-server/
@@ -131,6 +131,7 @@ whois-mcp-server/
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
+│   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
 ├── src/
