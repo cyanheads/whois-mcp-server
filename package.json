@@ -1,6 +1,6 @@
 {
   "name": "@cyanheads/whois-mcp-server",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "mcpName": "io.github.cyanheads/whois-mcp-server",
   "description": "Look up domain registration, check registry record status, fetch DNS records, and resolve IPs and ASNs over RDAP and DNS-over-HTTPS via MCP. STDIO or Streamable HTTP.",
   "type": "module",

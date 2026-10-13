@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.2.0](changelog/0.2.x/0.2.0.md) — 2026-10-13 · ⚠️ Breaking
+
+DNS and RDAP results preserve uncertainty, with optional registrar contact detail.
+
 ## [0.1.6](changelog/0.1.x/0.1.6.md) — 2026-09-30
 
 Lookup inputs are validated whole before any request, DNS results attribute each query to its resolver, and the dossier renders every TXT record and labels providers by domain.
