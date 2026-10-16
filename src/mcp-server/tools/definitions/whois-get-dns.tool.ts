@@ -15,7 +15,7 @@ export const whoisGetDns = tool('whois_get_dns', {
   description:
     'Fetch DNS records for a domain via DNS-over-HTTPS. Supports A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR. ' +
     'Multiple types are fetched in parallel. NXDOMAIN is returned as nxdomain: true in the result, not as an ' +
-    'error — it means the name does not exist in DNS. NOERROR with no answers is empty data; DNS failure codes ' +
+    'error — the terminal name does not exist; preceding alias answers are retained. NOERROR with no answers is empty data; DNS failure codes ' +
     'and truncated responses are errors after retries and fallback. TXT values are returned completely and rendered literally.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
@@ -46,7 +46,7 @@ export const whoisGetDns = tool('whois_get_dns', {
       .boolean()
       .describe(
         'True when at least one requested type returned NXDOMAIN / Status 3. ' +
-          'Successful answers from other type queries remain in records. This is data, not an error.',
+          'Supported answers, including aliases preceding the absent terminal name, remain in records. This is data, not an error.',
       ),
     records: z
       .array(

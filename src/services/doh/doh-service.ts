@@ -117,11 +117,8 @@ export class DohService {
           source = 'nextdns';
         }
 
-        if (resp.Status === 3) {
-          // NXDOMAIN — domain does not exist in DNS
-          nxdomain = true;
-          return { type, source };
-        }
+        // NXDOMAIN describes the terminal name; preceding CNAME answers remain useful.
+        if (resp.Status === 3) nxdomain = true;
 
         for (const answer of resp.Answer ?? []) {
           const typeName = TYPE_NUM_TO_NAME[answer.type];

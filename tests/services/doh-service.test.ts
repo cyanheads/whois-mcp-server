@@ -19,6 +19,42 @@ afterEach(() => {
 });
 
 describe('DoH characterization', () => {
+  it('retains the supported NXDOMAIN answer chain and provenance (#29)', async () => {
+    const answers = [
+      { type: 5, name: 'example.com.', TTL: 60, data: 'second.example.' },
+      { type: 5, name: 'second.example.', TTL: 30, data: 'absent.example.' },
+      { type: 999, name: 'example.com.', TTL: 1, data: 'unsupported' },
+    ];
+    http = upstream({ dns: () => Response.json({ Status: 3, TC: false, Answer: answers }) });
+    const result = await runToolContract(whoisGetDns, { domain: 'example.com', types: ['A'] });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      nxdomain: true,
+      records: answers
+        .slice(0, 2)
+        .map(({ name, TTL, data }) => ({ type: 'CNAME', name, ttl: TTL, data })),
+      query_sources: [{ type: 'A', source: 'cloudflare' }],
+    });
+    for (const answer of answers.slice(0, 2)) {
+      expect(textOf(result)).toContain(answer.name);
+      expect(textOf(result)).toContain(answer.data);
+      expect(textOf(result)).toContain(`TTL: ${answer.TTL}s`);
+    }
+    expect(textOf(result)).toContain('A: cloudflare');
+  });
+  it('keeps PTR NXDOMAIN terminal even when an alias is present (#29)', async () => {
+    http = upstream({
+      dns: () =>
+        Response.json({
+          Status: 3,
+          Answer: [{ type: 5, name: '1.2.0.192.in-addr.arpa.', TTL: 60, data: 'absent.example.' }],
+        }),
+    });
+    expect(await new DohService().ptrLookup('1.2.0.192.in-addr.arpa', createMockContext())).toEqual(
+      { ptr: null, ptr_status: 'not_found' },
+    );
+    expect(http.calls).toHaveLength(1);
+  });
   it('keeps one total deadline across successive PTR aliases (#22)', async () => {
     vi.useFakeTimers();
     vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
