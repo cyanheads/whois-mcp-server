@@ -1,6 +1,6 @@
 # whois-mcp-server - Directory Structure
 
-Generated on: 2026-10-13 13:28:28
+Generated on: 2026-10-16 16:55:52
 
 ```text
 whois-mcp-server/
@@ -146,6 +146,7 @@ whois-mcp-server/
 │   │   └── tools/
 │   │       └── definitions/
 │   │           ├── _fqdn.ts
+│   │           ├── _literal.ts
 │   │           ├── whois-check-availability.tool.ts
 │   │           ├── whois-get-dns.tool.ts
 │   │           ├── whois-get-dossier.tool.ts
@@ -156,9 +157,11 @@ whois-mcp-server/
 │   │   ├── doh/
 │   │   │   ├── doh-service.ts
 │   │   │   └── types.ts
-│   │   └── rdap/
-│   │       ├── rdap-service.ts
-│   │       └── types.ts
+│   │   ├── rdap/
+│   │   │   ├── rdap-service.ts
+│   │   │   └── types.ts
+│   │   └── routing/
+│   │       └── routing-service.ts
 │   ├── app.ts
 │   └── index.ts
 ├── tests/
@@ -174,12 +177,16 @@ whois-mcp-server/
 │   ├── resources/
 │   ├── services/
 │   │   ├── doh-service.test.ts
-│   │   └── rdap-service.test.ts
+│   │   ├── rdap-service.test.ts
+│   │   └── routing-service.test.ts
 │   ├── tools/
 │   │   ├── dossier-contracts.test.ts
 │   │   ├── framework-adoption.test.ts
 │   │   ├── lookup-contracts.test.ts
+│   │   ├── primary-domain-contracts.test.ts
+│   │   ├── provider-rendering.test.ts
 │   │   ├── rdap-captures.test.ts
+│   │   ├── routing-contracts.test.ts
 │   │   ├── whois-check-availability.tool.test.ts
 │   │   ├── whois-get-dns.tool.test.ts
 │   │   ├── whois-get-dossier.tool.test.ts

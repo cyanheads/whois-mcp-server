@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "whois-mcp-server",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Domain registry records and status, DNS records, and IP/ASN resolution over RDAP and DoH.",
   "author": { "name": "cyanheads" },
   "repository": {
