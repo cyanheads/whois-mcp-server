@@ -8,6 +8,7 @@ import { vi } from 'vitest';
 import * as doh from '@/services/doh/doh-service.js';
 import type { DnsRecordType, DohResponse } from '@/services/doh/types.js';
 import * as rdap from '@/services/rdap/rdap-service.js';
+import * as routing from '@/services/routing/routing-service.js';
 
 /** Install fresh real services and route only their outbound HTTP boundary. */
 export function upstream(
@@ -15,11 +16,19 @@ export function upstream(
     dns?: (type: DnsRecordType, url: URL) => Response | Promise<Response>;
     rdap?: (url: URL) => Response;
     coverage?: boolean;
+    routing?: (request: Request) => Response | Promise<Response>;
   } = {},
 ) {
   vi.spyOn(rdap, 'getRdapService').mockReturnValue(new rdap.RdapService());
   vi.spyOn(doh, 'getDohService').mockReturnValue(new doh.DohService());
+  vi.spyOn(routing, 'getRoutingService').mockReturnValue(new routing.RoutingService());
   const http = createFetchMock([
+    {
+      match: (request) => new URL(request.url).hostname === 'stat.ripe.net',
+      respond: (request) =>
+        options.routing?.(request) ??
+        Response.json({ status: 'ok', data: { prefix: '8.8.8.0/24', asns: ['15169'] } }),
+    },
     {
       match: (request) => new URL(request.url).origin === 'https://data.iana.org',
       respond: (request) => {

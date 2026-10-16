@@ -8,6 +8,7 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
 import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
+import { literal } from './_literal.js';
 
 export const whoisLookupDomain = tool('whois_lookup_domain', {
   title: 'Domain Registration Lookup',
@@ -112,6 +113,14 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
 
   errors: [
     {
+      reason: 'rdap_invalid_domain_response',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'The primary RDAP response is not a matching successful domain object.',
+      recovery: 'Retry later when the registry returns a valid matching domain record.',
+      retryable: false,
+      thrownBy: 'service',
+    },
+    {
       reason: 'rdap_no_coverage',
       code: JsonRpcErrorCode.NotFound,
       when: 'TLD has no RDAP server in the IANA bootstrap — cannot perform lookup.',
@@ -159,7 +168,7 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
   format: (result) => {
     const lines: string[] = [];
 
-    lines.push(`# Domain: ${result.domain}`);
+    lines.push(`# Domain: ${literal(result.domain)}`);
 
     if (!result.rdap_coverage) {
       lines.push('**RDAP Coverage:** No — TLD has no RDAP server.');
@@ -169,34 +178,37 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
     lines.push(`**RDAP Coverage:** Yes`);
     if (result.registrar)
       lines.push(
-        `**Registrar:** ${result.registrar}${result.registrar_iana_id ? ` (IANA #${result.registrar_iana_id})` : ''}`,
+        `**Registrar:** ${literal(result.registrar)}${result.registrar_iana_id ? ` (IANA #${literal(result.registrar_iana_id)})` : ''}`,
       );
-    if (result.created_date) lines.push(`**Created:** ${result.created_date}`);
-    if (result.expiry_date) lines.push(`**Expires:** ${result.expiry_date}`);
-    if (result.updated_date) lines.push(`**Last Updated:** ${result.updated_date}`);
-    if (result.rdap_last_updated) lines.push(`**RDAP DB Updated:** ${result.rdap_last_updated}`);
-    if (result.handle) lines.push(`**Handle:** ${result.handle}`);
+    if (result.created_date) lines.push(`**Created:** ${literal(result.created_date)}`);
+    if (result.expiry_date) lines.push(`**Expires:** ${literal(result.expiry_date)}`);
+    if (result.updated_date) lines.push(`**Last Updated:** ${literal(result.updated_date)}`);
+    if (result.rdap_last_updated)
+      lines.push(`**RDAP DB Updated:** ${literal(result.rdap_last_updated)}`);
+    if (result.handle) lines.push(`**Handle:** ${literal(result.handle)}`);
     lines.push(
       `**DNSSEC:** ${result.dnssec_signed === null ? 'Unknown' : result.dnssec_signed ? 'Signed' : 'Not signed'}`,
     );
     lines.push(
       `**Registrant Redacted:** ${result.registrant_redacted === null ? 'Unknown' : result.registrant_redacted ? 'Yes (GDPR/privacy)' : 'No'}`,
     );
-    if (result.registrant_org) lines.push(`**Registrant Org:** ${result.registrant_org}`);
-    if (result.status.length > 0) lines.push(`**Status:** ${result.status.join(', ')}`);
+    if (result.registrant_org) lines.push(`**Registrant Org:** ${literal(result.registrant_org)}`);
+    if (result.status.length > 0)
+      lines.push(`**Status:** ${result.status.map(literal).join(', ')}`);
     if (result.nameservers.length > 0)
-      lines.push(`**Nameservers:** ${result.nameservers.join(', ')}`);
+      lines.push(`**Nameservers:** ${result.nameservers.map(literal).join(', ')}`);
     if (result.registrar_detail) {
       const detail = result.registrar_detail;
       lines.push(`**Registrar Detail:** ${detail.status}`);
-      if (detail.source) lines.push(`**Registrar Source:** ${detail.source}`);
+      if (detail.source) lines.push(`**Registrar Source:** ${literal(detail.source)}`);
       if (detail.registrant_org)
-        lines.push(`**Registrar Registrant Org:** ${detail.registrant_org}`);
+        lines.push(`**Registrar Registrant Org:** ${literal(detail.registrant_org)}`);
       if (detail.status === 'found')
         lines.push(
           `**Registrar Registrant Redacted:** ${detail.registrant_redacted === null ? 'Unknown' : detail.registrant_redacted ? 'Yes' : 'No'}`,
         );
-      if (detail.source_error) lines.push(`**Registrar Detail Error:** ${detail.source_error}`);
+      if (detail.source_error)
+        lines.push(`**Registrar Detail Error:** ${literal(detail.source_error)}`);
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

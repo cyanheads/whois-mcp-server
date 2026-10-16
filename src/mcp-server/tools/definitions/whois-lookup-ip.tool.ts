@@ -7,7 +7,9 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getDohService } from '@/services/doh/doh-service.js';
 import { getRdapService, ipv4ToPtr, ipv6ToPtr, validateIp } from '@/services/rdap/rdap-service.js';
+import { getRoutingService } from '@/services/routing/routing-service.js';
 import { IP_PATTERN } from './_fqdn.js';
+import { literal } from './_literal.js';
 
 export const whoisLookupIp = tool('whois_lookup_ip', {
   title: 'IP Address / Network Lookup',
@@ -17,10 +19,18 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
     'via DoH. PTR status distinguishes found, not_found, and failed with ptr_source_error. Alias traversal is limited ' +
     'to five transitions under one DNS deadline. The base address is queried for CIDR input. ' +
     'The server excludes IPv4 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.168/16, 255/8 ' +
-    'and IPv6 ::1/128, fc00::/7, fe80::/10. Other special-use addresses remain eligible for lookup.',
+    'and IPv6 ::1/128, fc00::/7, fe80::/10. Other special-use addresses remain eligible for lookup. ' +
+    'include_routing optionally adds RIPEstat RIS-observed prefix and all origin ASNs for whois_lookup_asn; ' +
+    'routing observations use eight-hour dumps and are separate from registry ownership. Optional failure retains RDAP/PTR.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
+    include_routing: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Add separately attributed RIS routing observations under one 3000 ms deadline. Omitted/false makes no routing request; no ASN-detail lookups are performed.',
+      ),
     ip: z
       .string()
       .min(1)
@@ -36,6 +46,37 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
   }),
 
   output: z.object({
+    routing: z
+      .object({
+        status: z
+          .enum(['found', 'not_found', 'failed'])
+          .describe('RIS observation found, successful absence, or optional upstream failure.'),
+        prefix: z
+          .string()
+          .nullable()
+          .describe(
+            'RIS-observed containing prefix, independent of registry allocation CIDRs; null on absence/failure.',
+          ),
+        origin_asns: z
+          .array(z.string())
+          .describe(
+            'All observed origin ASNs in provider order, directly accepted by whois_lookup_asn.',
+          ),
+        source: z.string().describe('RIPEstat Network Info data source URL.'),
+        snapshot_basis: z.string().describe('RIS eight-hour dump basis and ownership distinction.'),
+        next_tool: z
+          .literal('whois_lookup_asn')
+          .describe('Use this tool with an origin_asns value to retrieve ASN details.'),
+        source_error: z
+          .string()
+          .optional()
+          .describe('Optional routing failure explanation; RDAP and PTR remain usable.'),
+        recovery: z.string().optional().describe('How to retry optional routing after a failure.'),
+      })
+      .optional()
+      .describe(
+        'Routing detail only when include_routing is enabled; separate from registry ownership.',
+      ),
     ip: z.string().describe('The IP or CIDR queried.'),
     handle: z.string().optional().describe('RIR handle / object identifier.'),
     start_address: z.string().optional().describe('Start address of the IP netblock.'),
@@ -124,29 +165,47 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
     // PTR lookup — best-effort, failure = null
     const { base, isIpv6 } = parsed;
     const ptrName = isIpv6 ? ipv6ToPtr(base) : ipv4ToPtr(base);
-    const ptr = await getDohService().ptrLookup(ptrName, ctx);
-
-    return { ...network, ...ptr };
+    const [ptr, routing] = await Promise.all([
+      getDohService().ptrLookup(ptrName, ctx),
+      input.include_routing ? getRoutingService().lookup(base, ctx) : undefined,
+    ]);
+    ctx.signal.throwIfAborted();
+    return { ...network, ...ptr, ...(routing ? { routing } : {}) };
   },
 
   format: (result) => {
     const lines: string[] = [];
     lines.push(`# IP: ${result.ip}`);
-    if (result.rdap_source) lines.push(`**RIR Source:** ${result.rdap_source}`);
-    if (result.org_name) lines.push(`**Organization:** ${result.org_name}`);
-    if (result.cidrs.length) lines.push(`**CIDRs:** ${result.cidrs.join(', ')}`);
+    if (result.rdap_source) lines.push(`**RIR Source:** ${literal(result.rdap_source)}`);
+    if (result.org_name) lines.push(`**Organization:** ${literal(result.org_name)}`);
+    if (result.cidrs.length) lines.push(`**CIDRs:** ${result.cidrs.map(literal).join(', ')}`);
+    if (result.cidr) lines.push(`**CIDR:** ${literal(result.cidr)}`);
     if (result.start_address && result.end_address) {
-      lines.push(`**Range:** ${result.start_address} — ${result.end_address}`);
+      lines.push(`**Range:** ${literal(result.start_address)} — ${literal(result.end_address)}`);
     }
-    if (result.name) lines.push(`**Network Name:** ${result.name}`);
-    if (result.type) lines.push(`**Type:** ${result.type}`);
-    if (result.ip_version) lines.push(`**IP Version:** ${result.ip_version}`);
-    if (result.country) lines.push(`**Country:** ${result.country}`);
-    if (result.handle) lines.push(`**Handle:** ${result.handle}`);
-    if (result.abuse_email) lines.push(`**Abuse Email:** ${result.abuse_email}`);
-    lines.push(`**Reverse DNS (PTR):** ${result.ptr ?? 'Not available'}`);
+    if (result.name) lines.push(`**Network Name:** ${literal(result.name)}`);
+    if (result.type) lines.push(`**Type:** ${literal(result.type)}`);
+    if (result.ip_version) lines.push(`**IP Version:** ${literal(result.ip_version)}`);
+    if (result.country) lines.push(`**Country:** ${literal(result.country)}`);
+    if (result.handle) lines.push(`**Handle:** ${literal(result.handle)}`);
+    if (result.abuse_email) lines.push(`**Abuse Email:** ${literal(result.abuse_email)}`);
+    lines.push(`**Reverse DNS (PTR):** ${literal(result.ptr ?? 'Not available')}`);
     lines.push(`**PTR Status:** ${result.ptr_status}`);
-    if (result.ptr_source_error) lines.push(`**PTR Error:** ${result.ptr_source_error}`);
+    if (result.ptr_source_error) lines.push(`**PTR Error:** ${literal(result.ptr_source_error)}`);
+    if (result.routing) {
+      const routing = result.routing;
+      lines.push(
+        '\n## Routing observations (separate from registry ownership)',
+        `**Routing Status:** ${routing.status}`,
+        `**Routing Source:** ${literal(routing.source)}`,
+        `**Snapshot Basis:** ${literal(routing.snapshot_basis)}`,
+        `**Observed Prefix:** ${literal(routing.prefix ?? 'Not available')}`,
+        `**Origin ASNs:** ${routing.origin_asns.length ? routing.origin_asns.map(literal).join(', ') : 'None observed'}`,
+        `**Next tool:** ${routing.next_tool} — pass an origin_asns value as asn; no ASN details were fetched.`,
+      );
+      if (routing.source_error) lines.push(`**Routing Error:** ${literal(routing.source_error)}`);
+      if (routing.recovery) lines.push(`**Routing Recovery:** ${literal(routing.recovery)}`);
+    }
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

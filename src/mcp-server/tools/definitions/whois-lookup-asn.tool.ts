@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import { ASN_PATTERN } from './_fqdn.js';
+import { literal } from './_literal.js';
 
 export const whoisLookupAsn = tool('whois_lookup_asn', {
   title: 'ASN Lookup',
@@ -81,12 +82,12 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
   format: (result) => {
     const lines: string[] = [];
     lines.push(`# ASN: ${result.asn}`);
-    if (result.org_name) lines.push(`**Organization:** ${result.org_name}`);
-    if (result.rir) lines.push(`**RIR:** ${result.rir}`);
-    if (result.name) lines.push(`**Network Name:** ${result.name}`);
-    if (result.type) lines.push(`**Type:** ${result.type}`);
-    if (result.country) lines.push(`**Country:** ${result.country}`);
-    if (result.handle) lines.push(`**Handle:** ${result.handle}`);
+    if (result.org_name) lines.push(`**Organization:** ${literal(result.org_name)}`);
+    if (result.rir) lines.push(`**RIR:** ${literal(result.rir)}`);
+    if (result.name) lines.push(`**Network Name:** ${literal(result.name)}`);
+    if (result.type) lines.push(`**Type:** ${literal(result.type)}`);
+    if (result.country) lines.push(`**Country:** ${literal(result.country)}`);
+    if (result.handle) lines.push(`**Handle:** ${literal(result.handle)}`);
     if (result.start_autnum !== undefined && result.end_autnum !== undefined) {
       if (result.start_autnum === result.end_autnum) {
         lines.push(`**ASN Range:** ${result.start_autnum}`);

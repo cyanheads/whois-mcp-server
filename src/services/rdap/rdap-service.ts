@@ -5,6 +5,7 @@
  */
 
 import { isIP } from 'node:net';
+import { domainToASCII } from 'node:url';
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import {
@@ -218,6 +219,29 @@ function registrantEvidence(raw: RdapDomainRaw): {
     ...(org && !placeholder(org) ? { registrant_org: org } : {}),
     registrant_redacted: entityRedaction || scopedRedaction ? true : null,
   };
+}
+
+/** Validate the primary object's identity without requiring optional registry fields. */
+function primaryDomain(raw: unknown, domain: string): RdapDomainRaw {
+  const failure = () =>
+    serviceUnavailable('RDAP response does not contain the matching domain object.', {
+      reason: 'rdap_invalid_domain_response',
+      retryable: false,
+    });
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || 'errorCode' in raw) throw failure();
+  if ('objectClassName' in raw && raw.objectClassName !== 'domain') throw failure();
+  const names = ['ldhName', 'unicodeName'] as const;
+  const expected = domainToASCII(domain).toLowerCase();
+  let identityFound = false;
+  for (const key of names) {
+    if (!(key in raw)) continue;
+    const name = raw[key as keyof typeof raw];
+    if (typeof name !== 'string' || !name || domainToASCII(name).toLowerCase() !== expected)
+      throw failure();
+    identityFound = true;
+  }
+  if (!identityFound) throw failure();
+  return raw as RdapDomainRaw;
 }
 
 /** Normalize RDAP domain response to our output shape */
@@ -485,7 +509,7 @@ export class RdapService {
           isTransient: (err: unknown) => !isRdapNotFound(err),
         },
       );
-      const record = normalizeDomain(raw);
+      const record = normalizeDomain(primaryDomain(raw, domain));
       ctx.signal.throwIfAborted();
       if (includeRegistrar) record.registrar_detail = await this.registrarDetail(raw, domain, ctx);
       return record;
@@ -623,7 +647,8 @@ export class RdapService {
         },
       );
 
-      const record = normalizeDomain(raw);
+      ctx.signal.throwIfAborted();
+      const record = normalizeDomain(primaryDomain(raw, domain));
       return { available: false, registration_status: 'registered', record };
     } catch (err) {
       // Preserve record absence independently of registration eligibility.

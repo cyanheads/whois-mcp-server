@@ -5,7 +5,7 @@
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
-**Zod:** ^4.6.5
+**Zod:** ^4.6.7
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -224,6 +224,8 @@ src/
     doh/
       doh-service.ts                    # DNS-over-HTTPS client — Cloudflare primary, NextDNS fallback
       types.ts                          # DoH record types
+    routing/
+      routing-service.ts               # Optional RIPEstat RIS routing observations
   mcp-server/
     tools/definitions/
       whois-lookup-domain.tool.ts       # Domain registration record via RDAP
@@ -233,6 +235,7 @@ src/
       whois-lookup-asn.tool.ts          # ASN to org/RIR resolution via RIR RDAP
       whois-get-dossier.tool.ts         # One-call domain triage — registration + DNS in parallel
       _fqdn.ts                          # Shared registration/DNS/ASN/IP syntax patterns
+      _literal.ts                       # Literal provider text for Markdown presentation
 ```
 
 ---
@@ -244,6 +247,10 @@ Registry object absence never establishes registration eligibility. `whois_check
 Registrant org comes from jCard `org`; personal `fn` is not organization data. Explicit registrant redaction and missing evidence yield true and null respectively; public org survives independently. DNSSEC preserves provider `delegationSigned`, with missing/no-coverage evidence null. Domain and dossier formatters render unknown states explicitly. Optional `include_registrar` detail stays nested, never overriding registry authority; one referral, no retry/recursion, five guarded redirects and one total RDAP deadline. Destination checks are best-effort against DNS rebinding.
 
 DNS owner syntax separately permits underscores and one normalized root dot. Failure RCODEs and truncated replies never become empty successes; CAA does not repeat NextDNS as fallback, and cancellation starts no further requests. TXT uses complete literal fences, not an injection boundary. PTR selects only reachable owner-matched records, allows five aliases under one DNS deadline, and discloses found/not_found/failed plus failure detail. IP output retains all ordered `cidrs`, with scalar `cidr` only for one component. A missing IANA route is non-retryable `ip_no_rdap_route`; bootstrap fetch failure stays operational.
+
+Primary domain objects must carry matching identity (case/IDNA equivalent), reject error envelopes and explicitly wrong classes, and accept sparse name-only records. Invalid objects are `rdap_invalid_domain_response`, not registration evidence. NXDOMAIN retains supported preceding aliases; PTR remains terminal on NXDOMAIN. Dossier null MX stays `0 .` with an explicit no-mail label and no provider. Provider strings use literal fences where Markdown would alter punctuation/spacing; structured strings stay unchanged.
+
+`whois_lookup_ip` optionally accepts `include_routing: true`: one RIPEstat Network Info request, after successful primary RDAP and parallel with PTR, under one fixed 3000 ms deadline covering headers and body, with no retries or ASN-detail fan-out. Nested routing is separately attributed RIS eight-hour-dump observation, never registry ownership; found, empty and failed outcomes remain distinct. Omitted/false adds no routing request. Optional failure retains primary data; cancellation propagates.
 
 Serialized patterns are the syntax gate (`InvalidParams`/`invalid_arguments`); IP/ASN semantic parsing and exclusions retain typed reasons. Preserve existing ASN whitespace/plus/zero-padding and CIDR padding without arbitrary input ceilings. See `docs/design.md` for the domain decisions.
 

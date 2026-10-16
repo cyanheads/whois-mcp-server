@@ -10,6 +10,7 @@ import type { NormalizedDnsRecord } from '@/services/doh/types.js';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
 import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
+import { literal } from './_literal.js';
 
 /** True when the error is a typed domain_not_found from rdap-service */
 function isDomainNotFound(err: unknown): boolean {
@@ -157,17 +158,21 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     // DNS section
     a_records: z
       .array(z.string())
-      .describe('IPv4 addresses (A records). Empty when DNS leg failed or NXDOMAIN.'),
+      .describe('IPv4 addresses (A records). Empty when DNS failed or no A answers were returned.'),
     mx_records: z
       .array(z.string())
-      .describe('Mail exchange hostnames (MX data). Empty when DNS leg failed or NXDOMAIN.'),
+      .describe(
+        'Mail exchange data; 0 . explicitly means no mail service. Empty when no MX evidence is returned.',
+      ),
     ns_records: z
       .array(z.string())
-      .describe('DNS nameservers from live DNS (NS data). Empty when DNS leg failed or NXDOMAIN.'),
+      .describe(
+        'DNS nameservers from live DNS (NS data). Empty when DNS failed or no NS answers were returned.',
+      ),
     txt_records: z
       .array(z.string())
       .describe(
-        'TXT record values (SPF, DKIM hints, etc.). Empty when DNS leg failed or NXDOMAIN.',
+        'TXT record values (SPF, DKIM hints, etc.). Empty when DNS failed or no TXT answers were returned.',
       ),
     dns_nxdomain: z
       .boolean()
@@ -291,7 +296,9 @@ export const whoisGetDossier = tool('whois_get_dossier', {
       status: reg?.status ?? [],
       nameservers: reg?.nameservers ?? [],
       a_records: aRecords.map((r) => r.data),
-      mx_records: mxRecords.map((r) => r.data.replace(/\.$/, '')),
+      mx_records: mxRecords.map((r) =>
+        r.data.trim() === '0 .' ? r.data : r.data.replace(/\.$/, ''),
+      ),
       ns_records: nsRecords.map((r) => r.data.replace(/\.$/, '')),
       txt_records: txtRecords.map((r) => r.data),
       dns_nxdomain: dnsNxdomain,
@@ -316,8 +323,8 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     } else if (!result.rdap_coverage) {
       lines.push('**RDAP Coverage:** None — TLD has no RDAP server');
     } else {
-      if (result.created_date) lines.push(`**Created:** ${result.created_date}`);
-      if (result.expiry_date) lines.push(`**Expires:** ${result.expiry_date}`);
+      if (result.created_date) lines.push(`**Created:** ${literal(result.created_date)}`);
+      if (result.expiry_date) lines.push(`**Expires:** ${literal(result.expiry_date)}`);
       if (result.age_days !== null) lines.push(`**Age:** ${result.age_days} days`);
       lines.push(
         `**DNSSEC:** ${result.dnssec_signed ? 'Signed' : result.dnssec_signed === false ? 'Not signed' : 'Unknown'}`,
@@ -325,26 +332,33 @@ export const whoisGetDossier = tool('whois_get_dossier', {
       lines.push(
         `**Privacy Redacted:** ${result.privacy_redacted ? 'Yes' : result.privacy_redacted === false ? 'No' : 'Unknown'}`,
       );
-      if (result.status.length > 0) lines.push(`**Status:** ${result.status.join(', ')}`);
+      if (result.status.length > 0)
+        lines.push(`**Status:** ${result.status.map(literal).join(', ')}`);
       if (result.nameservers.length > 0)
-        lines.push(`**Nameservers (RDAP):** ${result.nameservers.join(', ')}`);
+        lines.push(`**Nameservers (RDAP):** ${result.nameservers.map(literal).join(', ')}`);
     }
-    if (result.registrar) lines.push(`**Registrar:** ${result.registrar}`);
+    if (result.registrar) lines.push(`**Registrar:** ${literal(result.registrar)}`);
     if (result.rdap_coverage !== true) {
       lines.push('**DNSSEC:** Unknown', '**Privacy Redacted:** Unknown');
     }
-    if (result.rdap_source_error) lines.push(`**RDAP Error:** ${result.rdap_source_error}`);
+    if (result.rdap_source_error)
+      lines.push(`**RDAP Error:** ${literal(result.rdap_source_error)}`);
 
     // DNS section
     lines.push('\n## DNS');
     if (result.dns_source_error) {
-      lines.push(`**DNS:** Failed — ${result.dns_source_error}`);
+      lines.push(`**DNS:** Failed — ${literal(result.dns_source_error)}`);
     } else if (result.dns_nxdomain) {
       lines.push('**NXDOMAIN:** At least one DNS query returned NXDOMAIN.');
     }
-    if (result.a_records.length > 0) lines.push(`**A:** ${result.a_records.join(', ')}`);
-    if (result.ns_records.length > 0) lines.push(`**NS:** ${result.ns_records.join(', ')}`);
-    if (result.mx_records.length > 0) lines.push(`**MX:** ${result.mx_records.join(', ')}`);
+    if (result.a_records.length > 0)
+      lines.push(`**A:** ${result.a_records.map(literal).join(', ')}`);
+    if (result.ns_records.length > 0)
+      lines.push(`**NS:** ${result.ns_records.map(literal).join(', ')}`);
+    if (result.mx_records.length > 0)
+      lines.push(`**MX:** ${result.mx_records.map(literal).join(', ')}`);
+    if (result.mx_records.some((value) => value.trim() === '0 .'))
+      lines.push('**Null MX:** The domain explicitly accepts no mail.');
     if (result.txt_records.length > 0) {
       lines.push('**TXT:**');
       // Longer fences preserve literal data; delimiters are presentation, not a security boundary.
@@ -358,8 +372,8 @@ export const whoisGetDossier = tool('whois_get_dossier', {
 
     // Inferred signals
     lines.push('\n## Signals');
-    lines.push(`**NS Provider:** ${result.ns_provider ?? 'Unknown'}`);
-    lines.push(`**Mail Provider:** ${result.mx_provider ?? 'None / Unknown'}`);
+    lines.push(`**NS Provider:** ${literal(result.ns_provider ?? 'Unknown')}`);
+    lines.push(`**Mail Provider:** ${literal(result.mx_provider ?? 'None / Unknown')}`);
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

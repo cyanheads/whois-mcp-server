@@ -32,6 +32,21 @@ function dossier(records: Partial<Record<DnsRecordType, string[]>>) {
 }
 
 describe('dossier characterization', () => {
+  it('preserves null MX and labels its explicit no-mail meaning (#28)', async () => {
+    const result = await dossier({ MX: ['0 .'] });
+    expect(result.structuredContent).toMatchObject({ mx_records: ['0 .'], mx_provider: null });
+    expect(textOf(result)).toContain('**MX:** 0 .');
+    expect(textOf(result)).toContain('accepts no mail');
+  });
+  it('keeps ordinary and absent MX evidence distinct', async () => {
+    const result = await dossier({ MX: ['10 mail.example.net.'] });
+    expect(result.structuredContent).toMatchObject({ mx_records: ['10 mail.example.net'] });
+    http.restore();
+    vi.restoreAllMocks();
+    const empty = await dossier({});
+    expect(empty.structuredContent).toMatchObject({ mx_records: [], mx_provider: null });
+    expect(textOf(empty)).not.toContain('accepts no mail');
+  });
   it.each([
     [200, true, true, 'Found'],
     [404, true, false, 'Not found'],

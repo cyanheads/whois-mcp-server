@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
 import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
+import { literal } from './_literal.js';
 
 export const whoisCheckAvailability = tool('whois_check_availability', {
   title: 'Domain Registration Status',
@@ -50,6 +51,14 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
   }),
 
   errors: [
+    {
+      reason: 'rdap_invalid_domain_response',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'The primary RDAP response is not a matching successful domain object.',
+      recovery: 'Retry later when the registry returns a valid matching domain record.',
+      retryable: false,
+      thrownBy: 'service',
+    },
     {
       reason: 'non_registrable_domain',
       code: JsonRpcErrorCode.ValidationError,
@@ -95,8 +104,8 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
     );
     lines.push(`**RDAP Coverage:** ${result.rdap_coverage ? 'Yes' : 'No'}`);
 
-    if (result.registrar) lines.push(`**Registrar:** ${result.registrar}`);
-    if (result.expiry_date) lines.push(`**Expires:** ${result.expiry_date}`);
+    if (result.registrar) lines.push(`**Registrar:** ${literal(result.registrar)}`);
+    if (result.expiry_date) lines.push(`**Expires:** ${literal(result.expiry_date)}`);
 
     return [{ type: 'text', text: lines.join('\n') }];
   },
