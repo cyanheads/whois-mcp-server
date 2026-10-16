@@ -3,6 +3,7 @@
 /.claude/
 /.agents/
 /framework-skills/
+/tests/
 /docs/idea.md
 /logs/
 /Dockerfile
