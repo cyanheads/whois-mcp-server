@@ -42,56 +42,49 @@ Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain regi
 
 ### `whois_lookup_domain` <sub>tool</sub>
 
-- Accepts a fully qualified domain name and selects the registry RDAP server through IANA bootstrap.
-- Returns registrar, registration dates, nameservers, EPP status, DNSSEC, and `registrant_redacted`; throws `rdap_no_coverage` or `domain_not_found` when no record can be returned.
-- Absent DNSSEC and privacy evidence stay `null`. Public jCard `org` is independent of redacted contact fields; a person's formatted name is not an organization.
-- Primary responses must identify the queried domain (case and equivalent IDNA spellings are accepted). Malformed/error payloads and mismatched objects fail with `rdap_invalid_domain_response`; sparse matching name-only records remain valid. Dossiers retain successful DNS and disclose this RDAP failure.
-- `include_registrar: true` follows one registrar RDAP referral and returns separate `registrar_detail` with `found`, `no_referral`, or `failed` status and source URL. Registry dates, nameservers, status, and DNSSEC remain authoritative. Default lookups make no registrar request. The optional exchange has no retries, at most five guarded redirects, and one `RDAP_TIMEOUT_MS` deadline; failure retains the registry result, cancellation propagates. Destination checks are best-effort against DNS rebinding.
+- Takes a fully qualified domain name and picks the registry's RDAP server through IANA bootstrap.
+- Returns registrar, dates, nameservers, EPP status, DNSSEC, and `registrant_redacted`; DNSSEC and privacy stay `null` when the registry gives no evidence. Fails with `rdap_no_coverage`, `domain_not_found`, or `rdap_invalid_domain_response` (the response doesn't match the queried domain).
+- `include_registrar: true` follows one registrar RDAP referral and adds `registrar_detail` (`found`, `no_referral`, or `failed`, plus source URL). Off by default; limited by `RDAP_TIMEOUT_MS`, and a failure keeps the registry result.
 
 ---
 
 ### `whois_check_availability` <sub>tool</sub>
 
-- Accepts a fully qualified domain name for a registration check.
-- Returns `registration_status: registered | not_found | unknown`. `available` is `false` for a found registration and `null` otherwise; it never returns `true`. RDAP 404 establishes record absence, not eligibility to register.
-- Known ICANN subdomains return `non_registrable_domain` with their registrable parent; the query is never silently rewritten. Private suffixes do not create independent registration boundaries, and unlisted suffixes retain IANA coverage handling.
+- Takes a fully qualified domain name.
+- Returns `registration_status: registered | not_found | unknown`. `available` is `false` for a found registration and `null` otherwise, never `true`: a 404 means no record, not that the name can be registered.
+- Known ICANN subdomains return `non_registrable_domain` with their registrable parent.
 
 ---
 
 ### `whois_get_dns` <sub>tool</sub>
 
-- Accepts an ASCII DNS owner name, including underscore labels (`_dmarc.example.com`) and one terminal root dot. Names normalize to at most 253 characters, with nonempty 1–63-character labels; spaces, URLs, consecutive dots, and multiple terminal dots are rejected. Optional nonempty `types`: A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR; omission defaults to A, AAAA, MX, TXT, NS. Duplicate types are queried once.
-- Returns records with TTLs and ordered `query_sources: [{type, source}]`, including empty answers and NXDOMAIN. Legacy `source` is `cloudflare` if any query consumed a successful Cloudflare response, otherwise `nextdns`. NXDOMAIN is data about the terminal resolution target; preceding CNAME answers remain available to diagnose dangling aliases.
-- NOERROR/NODATA stays empty data; resolver failure codes and truncated responses return errors after retries/fallback. CAA queries use NextDNS once per retry sequence. TXT values, including duplicates, empty strings and newlines, remain complete on both surfaces and use content-sized Markdown fences for literal presentation.
+- Takes an ASCII DNS name (underscore labels like `_dmarc.example.com` are fine), up to 253 characters with 1–63-character labels. Optional `types`: A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR; defaults to A, AAAA, MX, TXT, NS.
+- Returns records with TTLs and `query_sources: [{type, source}]`, including empty answers and NXDOMAIN. Legacy `source` is `cloudflare` if any query got a successful Cloudflare response, otherwise `nextdns`.
+- Resolver failure codes and truncated responses return errors after retries and fallback. CAA queries go to NextDNS.
 
 ---
 
 ### `whois_lookup_ip` <sub>tool</sub>
 
-- Accepts a complete IPv4/IPv6 address with at most one decimal CIDR prefix (0–32 / 0–128); no whitespace, zone IDs, or brackets. Queries the base address and echoes the original `ip`. IPv4-mapped IPv6 uses the embedded IPv4 for policy, RDAP, and PTR; other IPv6 uses 32 reversed PTR nibbles.
-- Returns every provider CIDR in ordered `cidrs`; `cidr` appears only for exactly one component. Start/end addresses remain authoritative; missing CIDR extensions produce an empty list rather than an inferred prefix.
-- Best-effort PTR uses `ptr_status: found | not_found | failed`; failures include `ptr_source_error` and retain RDAP data. Only reachable owner-matched PTR records are selected, through at most five alias transitions under one `DOH_TIMEOUT_MS` deadline. Cancellation propagates.
-- `include_routing: true` adds `routing` with `found | not_found | failed`, a RIS-observed prefix and all `origin_asns` accepted by `whois_lookup_asn`. [RIPEstat Network Info](https://stat.ripe.net/docs/data-api/api-endpoints/network-info) uses RISwhois dumps updated every eight hours; routing observations are separate from registry ownership. One optional request runs alongside PTR after successful RDAP, under a fixed 3000 ms deadline including the response body, without retries or ASN-detail fan-out. Omission/false adds no dependency; routing failure retains RDAP/PTR and cancellation propagates.
-- Semantic input failures return `invalid_ip`; RIR 404 returns `ip_not_found`. A successfully loaded bootstrap with no covering route returns non-retryable `ip_no_rdap_route`, distinct from bootstrap failure.
-- `private_range` enforces an explicit policy: IPv4 `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `255.0.0.0/8`; IPv6 `::1/128`, `fc00::/7`, `fe80::/10`. Other special-use addresses remain eligible for registry records or normal no-coverage/not-found outcomes.
+- Takes an IPv4/IPv6 address with an optional CIDR prefix (0–32 / 0–128). Echoes the original `ip`.
+- Returns org, country, abuse contact, provider CIDRs in `cidrs` (`cidr` only when there is exactly one), and a best-effort reverse DNS lookup: `ptr_status: found | not_found | failed`, with `ptr_source_error` on failure while the RDAP data is kept.
+- `include_routing: true` adds `routing` (`found | not_found | failed`) with the RIS-observed prefix and `origin_asns`, from [RIPEstat Network Info](https://stat.ripe.net/docs/data-api/api-endpoints/network-info). Off by default; a routing failure keeps the RDAP and PTR results.
+- Fails with `invalid_ip`, `ip_not_found`, `ip_no_rdap_route` (no RIR covers the address; not retryable), or `private_range` for `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `255.0.0.0/8`, `::1/128`, `fc00::/7`, and `fe80::/10`.
 
 ---
 
 ### `whois_lookup_asn` <sub>tool</sub>
 
-- Accepts a decimal ASN from 1 to 4294967295 with an optional case-insensitive `AS` prefix and leading `+` (e.g., `AS15169`, `AS 15169`, `+15169`). Outer whitespace, whitespace after `AS`, and arbitrary zero-padding are allowed; whitespace inside digits or after `+`, suffixes, and decimals fail syntax validation. Out-of-range numbers retain `invalid_asn`.
-- Returns `name`, `org_name`, `country`, `rir`, `start_autnum`, and `end_autnum`; throws `asn_not_found` when no ASN record exists.
+- Takes an ASN from 1 to 4294967295, with an optional `AS` prefix (e.g., `AS15169`, `AS 15169`, `+15169`). Out-of-range numbers fail with `invalid_asn`.
+- Returns `name`, `org_name`, `country`, `rir`, `start_autnum`, and `end_autnum`; fails with `asn_not_found` when no record exists.
 
 ---
 
 ### `whois_get_dossier` <sub>tool</sub>
 
-- Accepts a fully qualified domain name for parallel registration and A/MX/NS/TXT lookups.
-- Returns registration, DNS, domain age, privacy status, and inferred NS/MX providers. Individual failures remain partial data in `rdap_source_error` or `dns_source_error`; `both_legs_failed` means neither source succeeded.
-- Null MX stays `0 .` and explicitly means the domain accepts no mail; it never implies a mail provider. Ordinary MX hostnames retain their normalized form.
-- Missing RDAP evidence, no coverage, and RDAP failure keep DNSSEC/privacy unknown. A registry miss is record absence without an eligibility guarantee; DNS failure codes and truncation populate `dns_source_error`.
-
-Identifier syntax is advertised in JSON Schema and rejected with `InvalidParams` / `invalid_arguments` before network calls. Complete IP parsing, prefix ranges, numeric ASN bounds, and exclusion policy retain typed semantic errors. Registration names use hostname grammar separately from DNS underscore/root-dot names; ASN and CIDR inputs have no arbitrary length ceiling.
+- Takes a fully qualified domain name and runs the registration and A/MX/NS/TXT lookups in parallel.
+- Returns registration, DNS, domain age, privacy status, and inferred NS/MX providers. A failed lookup leaves the other's data in place and sets `rdap_source_error` or `dns_source_error`; `both_legs_failed` means neither succeeded.
+- A null MX (`0 .`) means the domain accepts no mail.
 
 ---
 
@@ -109,10 +102,9 @@ RDAP / DNS-specific:
 Agent-friendly output:
 
 - Coverage signaled two ways — `rdap_coverage: false` returned as data by `whois_check_availability` and `whois_get_dossier`, while `whois_lookup_domain` throws `rdap_no_coverage` for the same case
-- Privacy redaction surfaced from explicit registrant evidence — `true` for redaction and `null` when evidence is absent; organization data is independent
-- Partial failure model — `whois_get_dossier` marks individual legs with a `source_error` field and continues; only both-legs-fail escalates to an error
+- Privacy redaction is `true` when the registry shows it and `null` when there's no evidence
+- Partial failure model — `whois_get_dossier` marks a failed lookup with a `source_error` field and continues; only both failing is an error
 - Factual signals, not scores — `age_days`, `privacy_redacted`, `ns_provider`, `mx_provider` are real data, not synthesized risk scores
-- Provider text retains its structured value; Markdown-sensitive punctuation and whitespace render in literal fences across registration, dossier, IP and ASN results, including optional registrar detail.
 
 ---
 
