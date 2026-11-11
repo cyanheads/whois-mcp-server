@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/whois-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/whois-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/whois-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-0.2.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/whois-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.4.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/@cyanheads/whois-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/@cyanheads/whois-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -31,10 +31,12 @@ Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain regi
 |:-----|:------------|
 | `whois_lookup_domain` | Full domain registration record — registrar, created/expiry dates, nameservers, EPP status, DNSSEC, registrant org |
 | `whois_check_availability` | Check registry record presence; missing records do not establish registration eligibility |
-| `whois_get_dns` | DNS owner records via DNS-over-HTTPS (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR) |
-| `whois_lookup_ip` | IP or CIDR netblock, org, country, abuse contact, and reverse DNS via RIR RDAP |
-| `whois_lookup_asn` | Resolve an ASN to its org name, country, and RIR source |
+| `whois_get_dns` | DNS owner records, including service discovery, DNSSEC, DANE, and HTTPS service parameters |
+| `whois_lookup_ip` | IP or CIDR netblock, org, country, abuse contact, registration dates, and reverse DNS via RIR RDAP |
+| `whois_lookup_asn` | Resolve an ASN to its organization, abuse contact, registration dates, country, and RIR source |
 | `whois_get_dossier` | One-call domain triage — registration + DNS in parallel, normalized into a single record with factual signals |
+
+The [whois-guide](./skills/whois-guide/SKILL.md) covers hostname investigations and tracing DNS addresses to registry allocations and observed origin ASNs. It ships with the plugin and is available to MCP clients as `skill://whois-guide/SKILL.md`.
 
 ---
 
@@ -42,15 +44,16 @@ Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain regi
 
 ### `whois_lookup_domain` <sub>tool</sub>
 
-- Takes a fully qualified domain name and picks the registry's RDAP server through IANA bootstrap.
+- Takes a Unicode or ASCII fully qualified domain name. Returns the ASCII `domain` and, for an IDN, `unicode_domain` as decoded display text.
 - Returns registrar, dates, nameservers, EPP status, DNSSEC, and `registrant_redacted`; DNSSEC and privacy stay `null` when the registry gives no evidence. Fails with `rdap_no_coverage`, `domain_not_found`, or `rdap_invalid_domain_response` (the response doesn't match the queried domain).
+- An exact registry miss can name a registrable parent to query next. Missing RDAP coverage points to DNS evidence, which cannot establish registration status.
 - `include_registrar: true` follows one registrar RDAP referral and adds `registrar_detail` (`found`, `no_referral`, or `failed`, plus source URL). Off by default; limited by `RDAP_TIMEOUT_MS`, and a failure keeps the registry result.
 
 ---
 
 ### `whois_check_availability` <sub>tool</sub>
 
-- Takes a fully qualified domain name.
+- Takes a Unicode or ASCII fully qualified domain name and returns its ASCII form with optional decoded `unicode_domain`.
 - Returns `registration_status: registered | not_found | unknown`. `available` is `false` for a found registration and `null` otherwise, never `true`: a 404 means no record, not that the name can be registered.
 - Known ICANN subdomains return `non_registrable_domain` with their registrable parent.
 
@@ -58,7 +61,8 @@ Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain regi
 
 ### `whois_get_dns` <sub>tool</sub>
 
-- Takes an ASCII DNS name (underscore labels like `_dmarc.example.com` are fine), up to 253 characters with 1–63-character labels. Optional `types`: A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR; defaults to A, AAAA, MX, TXT, NS.
+- Takes a Unicode or ASCII DNS name, including underscore owners and one terminal root dot. The ASCII lookup name is limited to 253 characters with 1–63-character labels; IDNs also return decoded `unicode_domain`.
+- Optional `types`: A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR, SRV, DS, DNSKEY, TLSA, HTTPS; defaults to A, AAAA, MX, TXT, NS. Record data retains the resolver's literal presentation.
 - Returns records with TTLs and `query_sources: [{type, source}]`, including empty answers and NXDOMAIN. Legacy `source` is `cloudflare` if any query got a successful Cloudflare response, otherwise `nextdns`.
 - Resolver failure codes and truncated responses return errors after retries and fallback. CAA queries go to NextDNS.
 
@@ -68,6 +72,7 @@ Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain regi
 
 - Takes an IPv4/IPv6 address with an optional CIDR prefix (0–32 / 0–128). Echoes the original `ip`.
 - Returns org, country, abuse contact, provider CIDRs in `cidrs` (`cidr` only when there is exactly one), and a best-effort reverse DNS lookup: `ptr_status: found | not_found | failed`, with `ptr_source_error` on failure while the RDAP data is kept.
+- Optional `registration_date` and `last_changed` preserve the queried object's RDAP timestamps. RIPE maintainer handles are excluded from `org_name`; missing organization evidence stays omitted.
 - `include_routing: true` adds `routing` (`found | not_found | failed`) with the RIS-observed prefix and `origin_asns`, from [RIPEstat Network Info](https://stat.ripe.net/docs/data-api/api-endpoints/network-info). Off by default; a routing failure keeps the RDAP and PTR results.
 - Fails with `invalid_ip`, `ip_not_found`, `ip_no_rdap_route` (no RIR covers the address; not retryable), or `private_range` for `0.0.0.0/8`, `10.0.0.0/8`, `100.64.0.0/10`, `127.0.0.0/8`, `169.254.0.0/16`, `172.16.0.0/12`, `192.168.0.0/16`, `255.0.0.0/8`, `::1/128`, `fc00::/7`, and `fe80::/10`.
 
@@ -76,14 +81,15 @@ Domain and network intelligence via RDAP and DNS-over-HTTPS. Look up domain regi
 ### `whois_lookup_asn` <sub>tool</sub>
 
 - Takes an ASN from 1 to 4294967295, with an optional `AS` prefix (e.g., `AS15169`, `AS 15169`, `+15169`). Out-of-range numbers fail with `invalid_asn`.
-- Returns `name`, `org_name`, `country`, `rir`, `start_autnum`, and `end_autnum`; fails with `asn_not_found` when no record exists.
+- Returns `name`, `org_name`, `country`, `rir`, `start_autnum`, and `end_autnum`, plus `abuse_email`, `registration_date`, and `last_changed` when the record carries them. Fails with `asn_not_found` when no record exists.
 
 ---
 
 ### `whois_get_dossier` <sub>tool</sub>
 
-- Takes a fully qualified domain name and runs the registration and A/MX/NS/TXT lookups in parallel.
+- Takes a Unicode or ASCII hostname and runs registration and A/MX/NS/TXT lookups in parallel. After an exact registry 404, it can try the ICANN registrable parent and identify it as `registration_domain`; DNS stays on the supplied hostname.
 - Returns registration, DNS, domain age, privacy status, and inferred NS/MX providers. A failed lookup leaves the other's data in place and sets `rdap_source_error` or `dns_source_error`; `both_legs_failed` means neither succeeded.
+- NS/MX provider inference uses the first record. Unknown-provider labels come from the registrable hostname, including multi-label suffixes such as `co.uk`.
 - A null MX (`0 .`) means the domain accepts no mail.
 
 ---
@@ -173,7 +179,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 - No API keys required — all data sources are public.
 
 ### Installation
@@ -215,11 +221,15 @@ cp .env.example .env
 | `DOH_MAX_RETRIES` | Max retry attempts on transient DoH failures. | `2` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
+| `MCP_HTTP_ENDPOINT_PATH` | Literal HTTP route path. Use a value such as `/mcp`. | `/mcp` |
+| `MCP_PUBLIC_URL` | Public HTTP(S) base URL. Omit credentials, query strings, and fragments. | Unset |
 | `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
 | `OTEL_ENABLED` | Enable [OpenTelemetry instrumentation](https://github.com/cyanheads/mcp-ts-core/tree/main/docs/telemetry). | `false` |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
+
+The default log directory and relative `LOGS_DIR` paths resolve from the installed server package. Set an absolute `LOGS_DIR` to log elsewhere.
 
 ---
 

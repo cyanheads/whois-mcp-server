@@ -16,6 +16,7 @@ export function upstream(
     dns?: (type: DnsRecordType, url: URL) => Response | Promise<Response>;
     rdap?: (url: URL) => Response;
     coverage?: boolean;
+    dnsSuffixes?: string[];
     routing?: (request: Request) => Response | Promise<Response>;
   } = {},
 ) {
@@ -34,7 +35,7 @@ export function upstream(
       respond: (request) => {
         const path = new URL(request.url).pathname;
         const ranges = path.endsWith('dns.json')
-          ? ['com']
+          ? (options.dnsSuffixes ?? ['com'])
           : path.endsWith('asn.json')
             ? ['1-4294967295']
             : path.endsWith('ipv6.json')

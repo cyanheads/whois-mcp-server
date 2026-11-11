@@ -4,22 +4,18 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { parse } from 'tldts';
 import { getDohService } from '@/services/doh/doh-service.js';
 import type { NormalizedDnsRecord } from '@/services/doh/types.js';
-import { getRdapService } from '@/services/rdap/rdap-service.js';
+import {
+  getRdapService,
+  icannRegistrableParent,
+  isDomainNotFound,
+} from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
-import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
+import { registrationNameInput, requireDomainName, unicodeDomainOutput } from './_fqdn.js';
 import { literal } from './_literal.js';
-
-/** True when the error is a typed domain_not_found from rdap-service */
-function isDomainNotFound(err: unknown): boolean {
-  return (
-    err instanceof McpError &&
-    typeof (err.data as Record<string, unknown>)?.reason === 'string' &&
-    (err.data as Record<string, unknown>).reason === 'domain_not_found'
-  );
-}
 
 /** Infer NS provider from the first NS record data (e.g., ns1.cloudflare.com → cloudflare) */
 function inferNsProvider(nsRecords: NormalizedDnsRecord[]): string | undefined {
@@ -47,10 +43,7 @@ function inferNsProvider(nsRecords: NormalizedDnsRecord[]): string | undefined {
   if (hasDomain(ns, 'domaincontrol.com')) return 'GoDaddy';
   if (hasDomain(ns, 'name.com')) return 'Name.com';
   if (hasDomain(ns, 'registrar-servers.com')) return 'Namecheap';
-  // Fall back to the second-level domain of the NS server
-  const parts = ns.split('.');
-  if (parts.length >= 2) return parts[parts.length - 2];
-  return;
+  return providerLabel(ns);
 }
 
 /** Infer MX provider from the first MX record data */
@@ -71,10 +64,14 @@ function inferMxProvider(mxRecords: NormalizedDnsRecord[]): string | undefined {
   if (hasDomain(mx, 'zoho.com')) return 'Zoho Mail';
   if (hasDomain(mx, 'sendgrid.net')) return 'SendGrid';
   if (hasDomain(mx, 'mailgun.org')) return 'Mailgun';
-  // Fall back to second-level domain
-  const parts = mx.split('.');
-  if (parts.length >= 2) return parts[parts.length - 2];
-  return;
+  return providerLabel(mx);
+}
+
+/** Infer a label from the hostname when a known provider does not match. */
+function providerLabel(hostname: string): string | undefined {
+  const suffix = parse(hostname, { allowPrivateDomains: false });
+  if (suffix.isIcann) return suffix.domainWithoutSuffix ?? undefined;
+  return hostname.split('.').at(-2);
 }
 
 /** Match whole DNS domains, including their subdomains. */
@@ -94,30 +91,22 @@ function ageDaysFromCreated(createdDate: string | undefined): number | undefined
 export const whoisGetDossier = tool('whois_get_dossier', {
   title: 'Domain Dossier',
   description:
-    'One-call domain triage: fetches registration record (RDAP) and DNS records (A, MX, NS, TXT) in ' +
-    'parallel, returning a single normalized record with factual signals — domain age in days, ' +
-    'privacy-redacted flag, registrar, NS provider inferred from NS records, mail provider inferred ' +
-    'from MX records. No synthesized scores — factual signals only. Partial results are surfaced when ' +
-    'one leg fails (registration or DNS marked with source_error); only when both legs fail does the ' +
-    'tool throw both_legs_failed. For the full registration record use whois_lookup_domain. For DNS ' +
-    'types beyond A/MX/NS/TXT (e.g., CNAME, CAA, SOA) use whois_get_dns.',
+    'Fetch the exact registration record and A, MX, NS and TXT records in parallel. After an exact registry 404, check the ICANN registrable parent when one is known and identify it as registration_domain. DNS stays on the supplied name. Returns registrar, domain age, privacy evidence and inferred NS and mail providers. A failed source leaves partial results when the other source succeeds. Use whois_lookup_domain for full registration details or whois_get_dns for additional record types.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
-    domain: z
-      .string()
-      .max(253)
-      .regex(
-        REGISTRATION_NAME_PATTERN,
-        'Provide a dot-separated ASCII hostname such as example.com; labels are 1–63 characters, without underscores, whitespace or a root dot.',
-      )
-      .describe(
-        'Fully qualified domain name for the triage (e.g., "github.com"). Must be a valid FQDN.',
-      ),
+    domain: registrationNameInput,
   }),
 
   output: z.object({
-    domain: z.string().describe('Normalized domain name.'),
+    domain: z.string().describe('Lowercase ASCII domain used for DNS.'),
+    unicode_domain: unicodeDomainOutput,
+    registration_domain: z
+      .string()
+      .optional()
+      .describe(
+        'ICANN registrable parent queried for registration after an exact 404. Omitted when registration was queried only for domain.',
+      ),
 
     // Registration section
     rdap_coverage: z
@@ -130,8 +119,7 @@ export const whoisGetDossier = tool('whois_get_dossier', {
       .boolean()
       .nullable()
       .describe(
-        'True when the domain has a registration record. False = RDAP 404 (no registry object found; not registration eligibility). ' +
-          'Null when RDAP coverage is absent or the leg failed.',
+        'True when a registration record was found for registration_domain or, when omitted, domain. False means the registration query returned 404. Null means coverage was absent or the query failed.',
       ),
     registrar: z.string().optional().describe('Registrar name from registration record.'),
     created_date: z.string().optional().describe('ISO 8601 registration creation date.'),
@@ -184,13 +172,13 @@ export const whoisGetDossier = tool('whois_get_dossier', {
       .string()
       .nullable()
       .describe(
-        'DNS provider inferred from NS record (e.g., "Cloudflare", "AWS Route 53"). Null when unknown or DNS leg failed.',
+        'Provider inferred from the first NS target by a known hostname match or registrable label. Null when unknown or DNS failed.',
       ),
     mx_provider: z
       .string()
       .nullable()
       .describe(
-        'Mail provider inferred from MX record (e.g., "Google Workspace", "Microsoft 365"). Null when no MX or DNS leg failed.',
+        'Provider inferred from the first MX target by a known hostname match or registrable label. Null when unknown, null MX, or DNS failed.',
       ),
 
     // Error signals
@@ -215,12 +203,24 @@ export const whoisGetDossier = tool('whois_get_dossier', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('Domain dossier lookup', { domain: input.domain });
+    const normalized = requireDomainName(input.domain, 'registration');
+    const domain = normalized.domain.toLowerCase();
+    ctx.log.info('Domain dossier lookup', { domain });
 
-    // Fan out RDAP and DNS lookups in parallel
+    const rdap = getRdapService();
+    let registrationDomain: string | undefined;
+    // Parent fallback shares a total budget; exact lookup retains its configured deadline.
+    const rdapCtx = { ...ctx, signal: AbortSignal.any([ctx.signal, AbortSignal.timeout(45_000)]) };
     const [rdapSettled, dnsSettled] = await Promise.allSettled([
-      getRdapService().lookupDomain(input.domain, ctx),
-      getDohService().lookup(input.domain, ['A', 'MX', 'NS', 'TXT'], ctx),
+      rdap.lookupDomain(normalized.domain, ctx).catch((error: unknown) => {
+        ctx.signal.throwIfAborted();
+        if (!isDomainNotFound(error)) throw error;
+        const parent = icannRegistrableParent(domain);
+        if (!parent || rdapCtx.signal.aborted) throw error;
+        registrationDomain = parent;
+        return rdap.lookupDomain(parent, rdapCtx);
+      }),
+      getDohService().lookup(normalized.domain, ['A', 'MX', 'NS', 'TXT'], ctx),
     ]);
     ctx.signal.throwIfAborted();
 
@@ -230,10 +230,17 @@ export const whoisGetDossier = tool('whois_get_dossier', {
     const rdapNotFound = rdapSettled.status === 'rejected' && isDomainNotFound(rdapSettled.reason);
 
     if (!rdapOk && !rdapNotFound && !dnsOk) {
-      throw ctx.fail('both_legs_failed', 'Both RDAP and DNS lookups failed — no data available.', {
-        rdap_error: rdapSettled.status === 'rejected' ? String(rdapSettled.reason) : undefined,
-        dns_error: dnsSettled.status === 'rejected' ? String(dnsSettled.reason) : undefined,
-      });
+      throw ctx.fail(
+        'both_legs_failed',
+        registrationDomain
+          ? `RDAP lookup for "${registrationDomain}" and DNS lookup for "${domain}" both failed.`
+          : 'Both RDAP and DNS lookups failed — no data available.',
+        {
+          ...(registrationDomain ? { registration_domain: registrationDomain } : {}),
+          rdap_error: rdapSettled.status === 'rejected' ? String(rdapSettled.reason) : undefined,
+          dns_error: dnsSettled.status === 'rejected' ? String(dnsSettled.reason) : undefined,
+        },
+      );
     }
 
     // Build result from available legs
@@ -283,7 +290,9 @@ export const whoisGetDossier = tool('whois_get_dossier', {
         : null;
 
     return {
-      domain: input.domain.toLowerCase(),
+      ...normalized,
+      domain,
+      ...(registrationDomain ? { registration_domain: registrationDomain } : {}),
       // RDAP 404 proves coverage, but only establishes registry-record absence.
       rdap_coverage: rdapNotFound ? true : rdapOk ? (reg?.rdap_coverage ?? null) : null,
       registered,
@@ -312,9 +321,12 @@ export const whoisGetDossier = tool('whois_get_dossier', {
   format: (result) => {
     const lines: string[] = [];
     lines.push(`# Domain Dossier: ${result.domain}`);
+    if (result.unicode_domain) lines.push(`**Unicode Display:** ${literal(result.unicode_domain)}`);
 
     // Registration section
     lines.push('\n## Registration');
+    if (result.registration_domain)
+      lines.push(`**Registration Domain:** ${literal(result.registration_domain)}`);
     lines.push(
       `**Registered (RDAP record):** ${result.registered === true ? 'Found' : result.registered === false ? 'Not found' : 'Unknown'}`,
     );

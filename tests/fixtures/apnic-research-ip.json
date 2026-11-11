@@ -1,0 +1,16 @@
+{
+  "links": [{ "rel": "self", "href": "https://rdap.apnic.net/ip/1.1.1.0/24" }],
+  "entities": [
+    {
+      "roles": ["abuse"],
+      "vcardArray": ["vcard", [["email", {}, "text", "helpdesk@apnic.net"]]]
+    },
+    {
+      "roles": ["registrant"],
+      "vcardArray": [
+        "vcard",
+        [["fn", {}, "text", "APNIC Research and Development"], ["kind", {}, "text", "org"]]
+      ]
+    }
+  ]
+}

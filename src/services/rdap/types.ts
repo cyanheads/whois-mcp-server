@@ -144,6 +144,7 @@ export interface NormalizedIpNetwork {
   handle?: string;
   ip: string;
   ip_version?: string;
+  last_changed?: string;
   name?: string;
   org_name?: string;
   /** Reverse DNS hostname, null when PTR lookup fails or returns nothing. */
@@ -151,18 +152,22 @@ export interface NormalizedIpNetwork {
   ptr_source_error?: string;
   ptr_status: 'found' | 'not_found' | 'failed';
   rdap_source?: string;
+  registration_date?: string;
   start_address?: string;
   type?: string;
 }
 
 /** Normalized ASN record */
 export interface NormalizedAsn {
+  abuse_email?: string;
   asn: string;
   country?: string;
   end_autnum?: number;
   handle?: string;
+  last_changed?: string;
   name?: string;
   org_name?: string;
+  registration_date?: string;
   rir?: string;
   start_autnum?: number;
   type?: string;

@@ -4,10 +4,14 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
-import { getRdapService } from '@/services/rdap/rdap-service.js';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import {
+  getRdapService,
+  icannRegistrableParent,
+  isDomainNotFound,
+} from '@/services/rdap/rdap-service.js';
 import type { NormalizedDomain } from '@/services/rdap/types.js';
-import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
+import { registrationNameInput, requireDomainName, unicodeDomainOutput } from './_fqdn.js';
 import { literal } from './_literal.js';
 
 export const whoisLookupDomain = tool('whois_lookup_domain', {
@@ -28,17 +32,7 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
       .describe(
         'Follow one guarded registrar RDAP referral for optional contact detail. Registry fields remain authoritative; failed detail is disclosed without discarding the registry record.',
       ),
-    domain: z
-      .string()
-      .max(253)
-      .regex(
-        REGISTRATION_NAME_PATTERN,
-        'Provide a dot-separated ASCII hostname such as example.com; labels are 1–63 characters, without underscores, whitespace or a root dot.',
-      )
-      .describe(
-        'Fully qualified domain name to look up (e.g., "example.com", "github.com"). ' +
-          'Must be a valid FQDN — labels separated by dots, each label up to 63 chars.',
-      ),
+    domain: registrationNameInput,
   }),
 
   output: z.object({
@@ -67,7 +61,8 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
       })
       .optional()
       .describe('Registrar contact detail only when include_registrar is true.'),
-    domain: z.string().describe('Normalized domain name (lowercased).'),
+    domain: z.string().describe('Lowercase ASCII domain queried.'),
+    unicode_domain: unicodeDomainOutput,
     rdap_coverage: z
       .boolean()
       .describe(
@@ -125,7 +120,7 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
       code: JsonRpcErrorCode.NotFound,
       when: 'TLD has no RDAP server in the IANA bootstrap — cannot perform lookup.',
       recovery:
-        'This TLD has no RDAP coverage. Use whois_check_availability to test registration status when possible.',
+        'This TLD has no RDAP coverage. Use whois_get_dns for DNS evidence or whois_get_dossier for DNS with registration marked unknown. DNS answers cannot establish registration status.',
     },
     {
       reason: 'domain_not_found',
@@ -137,38 +132,48 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('RDAP domain lookup', { domain: input.domain });
+    const normalized = requireDomainName(input.domain, 'registration');
+    const domain = normalized.domain.toLowerCase();
+    ctx.log.info('RDAP domain lookup', { domain });
 
     let record: NormalizedDomain;
     try {
-      record = await getRdapService().lookupDomain(input.domain, ctx, input.include_registrar);
+      record = await getRdapService().lookupDomain(normalized.domain, ctx, input.include_registrar);
     } catch (err) {
       // Re-throw domain_not_found with recovery hint from the typed contract
-      if (
-        err instanceof McpError &&
-        (err.data as { reason?: string } | undefined)?.reason === 'domain_not_found'
-      ) {
+      if (isDomainNotFound(err)) {
+        const parent = icannRegistrableParent(domain);
         throw ctx.fail('domain_not_found', err.message, {
-          domain: input.domain.toLowerCase(),
-          ...ctx.recoveryFor('domain_not_found'),
+          domain,
+          ...(parent
+            ? {
+                registrable_parent: parent,
+                recovery: {
+                  hint: `Query "${parent}" with whois_lookup_domain to check its registration record.`,
+                },
+              }
+            : ctx.recoveryFor('domain_not_found')),
         });
       }
       throw err;
     }
 
     if (!record.rdap_coverage) {
-      throw ctx.fail('rdap_no_coverage', `No RDAP server found for the TLD of "${input.domain}".`, {
-        domain: input.domain,
-      });
+      throw ctx.fail(
+        'rdap_no_coverage',
+        `No RDAP server found for the TLD of "${normalized.domain}".`,
+        { domain: normalized.domain },
+      );
     }
 
-    return record;
+    return { ...record, ...normalized, domain };
   },
 
   format: (result) => {
     const lines: string[] = [];
 
     lines.push(`# Domain: ${literal(result.domain)}`);
+    if (result.unicode_domain) lines.push(`**Unicode Display:** ${literal(result.unicode_domain)}`);
 
     if (!result.rdap_coverage) {
       lines.push('**RDAP Coverage:** No — TLD has no RDAP server.');

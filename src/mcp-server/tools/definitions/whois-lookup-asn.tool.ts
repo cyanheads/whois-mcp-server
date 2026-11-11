@@ -12,7 +12,7 @@ import { literal } from './_literal.js';
 export const whoisLookupAsn = tool('whois_lookup_asn', {
   title: 'ASN Lookup',
   description:
-    'Resolve an Autonomous System Number (ASN) to its org name, country, and RIR source via RIR RDAP. ' +
+    'Resolve an Autonomous System Number (ASN) to its org name, country, abuse contact, registration and change dates, and RIR source via RDAP. ' +
     'Accepts a decimal ASN from 1 to 4294967295 (e.g., "AS15169" or "15169"). Distinct from IP ' +
     'lookup — the entry point is the ASN itself, not an IP within its block.',
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
@@ -42,8 +42,22 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
     country: z
       .string()
       .optional()
-      .describe('Country code (ISO 3166-1 alpha-2). Omitted when not in RDAP data.'),
-    org_name: z.string().optional().describe('Organization name registered for this ASN.'),
+      .describe('Country code from RDAP, with two-letter codes normalized to uppercase.'),
+    org_name: z
+      .string()
+      .optional()
+      .describe(
+        'Registrant organization. For RIPE, only a direct organization registrant qualifies.',
+      ),
+    abuse_email: z.string().optional().describe('Abuse contact email address for this ASN.'),
+    registration_date: z
+      .string()
+      .optional()
+      .describe('RDAP registration event timestamp for this ASN, with its provider offset.'),
+    last_changed: z
+      .string()
+      .optional()
+      .describe('RDAP last changed event timestamp for this ASN, with its provider offset.'),
     rir: z
       .string()
       .optional()
@@ -88,6 +102,10 @@ export const whoisLookupAsn = tool('whois_lookup_asn', {
     if (result.type) lines.push(`**Type:** ${literal(result.type)}`);
     if (result.country) lines.push(`**Country:** ${literal(result.country)}`);
     if (result.handle) lines.push(`**Handle:** ${literal(result.handle)}`);
+    if (result.abuse_email) lines.push(`**Abuse Email:** ${literal(result.abuse_email)}`);
+    if (result.registration_date)
+      lines.push(`**Registration Date:** ${literal(result.registration_date)}`);
+    if (result.last_changed) lines.push(`**Last Changed:** ${literal(result.last_changed)}`);
     if (result.start_autnum !== undefined && result.end_autnum !== undefined) {
       if (result.start_autnum === result.end_autnum) {
         lines.push(`**ASN Range:** ${result.start_autnum}`);

@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { literal } from '@/mcp-server/tools/definitions/_literal.js';
+import { whoisGetDns } from '@/mcp-server/tools/definitions/whois-get-dns.tool.js';
 import { whoisGetDossier } from '@/mcp-server/tools/definitions/whois-get-dossier.tool.js';
 import { whoisLookupAsn } from '@/mcp-server/tools/definitions/whois-lookup-asn.tool.js';
 import { whoisLookupDomain } from '@/mcp-server/tools/definitions/whois-lookup-domain.tool.js';
@@ -27,6 +28,31 @@ function html(markdown: string): string {
 }
 
 describe('provider rendering characterization', () => {
+  it('renders HTTPS SvcParams literally and attributes the fallback resolver (#39)', async () => {
+    const data = '1 Target.Example.com. alpn="h3,h2" key65400="**literal** [tag](url)"';
+    const name = 'example.com.';
+    http = upstream({
+      dns: (_type, url) =>
+        url.hostname === 'cloudflare-dns.com'
+          ? new Response(null, { status: 400 })
+          : Response.json({ Status: 0, Answer: [{ type: 65, name, TTL: 30, data }] }),
+    });
+    const result = await runToolContract(whoisGetDns, { domain: name, types: ['HTTPS'] });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent).toEqual({
+      domain: 'example.com',
+      nxdomain: false,
+      source: 'nextdns',
+      query_sources: [{ type: 'HTTPS', source: 'nextdns' }],
+      records: [{ type: 'HTTPS', name, ttl: 30, data }],
+    });
+    const text = textOf(result);
+    expect(text).toContain('HTTPS: nextdns');
+    expect(text).toContain(`name: ${name} | TTL: 30s`);
+    expect(text).toContain(data);
+    expect(html(text)).toContain(`<pre><code>${data.replaceAll('"', '&quot;')}\n</code></pre>`);
+  });
+
   it('preserves strikethrough punctuation and adjacent fenced values', () => {
     expect(html(`**Registrar:** ${literal('~~Hidden Registrar~~')}`)).toContain(
       '<pre><code>~~Hidden Registrar~~\n</code></pre>',

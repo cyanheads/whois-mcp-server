@@ -28,6 +28,8 @@ describe('primary domain characterization', () => {
     { ldhName: 'different.com' },
     { ldhName: 123 },
     { ldhName: 'example.com', unicodeName: 'different.com' },
+    { ldhName: 'example.com/path' },
+    { ldhName: 'example.com', unicodeName: 'example.com?junk' },
   ])('rejects invalid source %j on every domain surface', async (raw) => {
     http = upstream({ rdap: () => Response.json(raw) });
     for (const definition of [whoisLookupDomain, whoisCheckAvailability]) {
@@ -66,6 +68,16 @@ describe('primary domain characterization', () => {
     const result = await runToolContract(whoisLookupDomain, { domain: 'xn--bcher-kva.com' });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({ domain: 'xn--bcher-kva.com' });
+  });
+  it('uses ASCII domain and decoded display for a sparse Unicode-only registry object (#40)', async () => {
+    http = upstream({ rdap: () => Response.json({ unicodeName: 'BÜCHER.com' }) });
+    const result = await runToolContract(whoisLookupDomain, { domain: 'xn--bcher-kva.com' });
+    expect(result.structuredContent).toMatchObject({
+      domain: 'xn--bcher-kva.com',
+      unicode_domain: 'bücher.com',
+      rdap_coverage: true,
+    });
+    expect(textOf(result)).toContain('**Unicode Display:** bücher.com');
   });
   it.each([
     { ldhName: 'EXAMPLE.COM' },

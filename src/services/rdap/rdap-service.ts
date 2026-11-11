@@ -5,7 +5,6 @@
  */
 
 import { isIP } from 'node:net';
-import { domainToASCII } from 'node:url';
 import type { Context } from '@cyanheads/mcp-ts-core';
 import type { AppConfig } from '@cyanheads/mcp-ts-core/config';
 import {
@@ -18,6 +17,7 @@ import type { StorageService } from '@cyanheads/mcp-ts-core/storage';
 import { fetchWithTimeout, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { parse } from 'tldts';
 import { getServerConfig } from '@/config/server-config.js';
+import { normalizeDomainName } from '@/domain-name.js';
 import type {
   IanaBootstrap,
   NormalizedAsn,
@@ -132,9 +132,9 @@ function extractTwoLabelSuffix(domain: string): string {
   return labels.slice(-2).join('.');
 }
 
-/** Identify RIR from an RDAP self-link URL */
-function rirFromSelfLink(selfLink: string): string | undefined {
-  const url = URL.parse(selfLink);
+/** Identify a RIR from the hostname of an RDAP URL. */
+function rirFromUrl(href: string): string | undefined {
+  const url = URL.parse(href);
   if (!url) return;
   const hostname = url.hostname.toLowerCase().replace(/\.$/, '');
   for (const rir of ['arin', 'ripe', 'apnic', 'lacnic', 'afrinic']) {
@@ -144,12 +144,12 @@ function rirFromSelfLink(selfLink: string): string | undefined {
 }
 
 /** Extract vCard field value by field name */
-function vcardField(vcard: VCard, fieldName: string): string | undefined {
+function vcardField(vcard: VCard, fieldName: string, nonBlank = false): string | undefined {
   for (const entry of vcard) {
     if (Array.isArray(entry) && entry[0] === fieldName) {
-      const val = entry[3 as keyof typeof entry];
-      if (typeof val === 'string') return val;
-      if (Array.isArray(val) && typeof val[0] === 'string') return val[0];
+      const val = entry.at(3);
+      const text = Array.isArray(val) ? val[0] : val;
+      if (typeof text === 'string' && (!nonBlank || text.trim())) return text;
     }
   }
   return;
@@ -160,13 +160,6 @@ function entityName(entity: RdapEntity): string | undefined {
   if (!entity.vcardArray) return;
   const vcard = entity.vcardArray[1];
   return vcardField(vcard, 'fn');
-}
-
-/** Extract email from an entity's vcard */
-function entityEmail(entity: RdapEntity): string | undefined {
-  if (!entity.vcardArray) return;
-  const vcard = entity.vcardArray[1];
-  return vcardField(vcard, 'email');
 }
 
 /** Find nested entity by role, searching recursively */
@@ -231,12 +224,15 @@ function primaryDomain(raw: unknown, domain: string): RdapDomainRaw {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw) || 'errorCode' in raw) throw failure();
   if ('objectClassName' in raw && raw.objectClassName !== 'domain') throw failure();
   const names = ['ldhName', 'unicodeName'] as const;
-  const expected = domainToASCII(domain).toLowerCase();
+  const expected = domain.toLowerCase();
   let identityFound = false;
   for (const key of names) {
     if (!(key in raw)) continue;
     const name = raw[key as keyof typeof raw];
-    if (typeof name !== 'string' || !name || domainToASCII(name).toLowerCase() !== expected)
+    if (
+      typeof name !== 'string' ||
+      normalizeDomainName(name, 'registration')?.domain.toLowerCase() !== expected
+    )
       throw failure();
     identityFound = true;
   }
@@ -245,7 +241,10 @@ function primaryDomain(raw: unknown, domain: string): RdapDomainRaw {
 }
 
 /** Normalize RDAP domain response to our output shape */
-function normalizeDomain(raw: RdapDomainRaw): NormalizedDomain & { rdap_coverage: true } {
+function normalizeDomain(
+  raw: RdapDomainRaw,
+  domain: string,
+): NormalizedDomain & { rdap_coverage: true } {
   const events = raw.events ?? [];
   const getDate = (action: string): string | undefined =>
     events.find((e) => e.eventAction === action)?.eventDate;
@@ -265,11 +264,10 @@ function normalizeDomain(raw: RdapDomainRaw): NormalizedDomain & { rdap_coverage
   const createdDate = getDate('registration');
   const updatedDate = getDate('last changed');
   const expiryDate = getDate('expiration');
-  const domainName = (raw.ldhName ?? raw.unicodeName ?? '').toLowerCase();
 
   // Build with exactOptionalPropertyTypes compliance using type assertion on optional fields
   const result: NormalizedDomain & { rdap_coverage: true } = {
-    domain: domainName,
+    domain: domain.toLowerCase(),
     rdap_coverage: true,
     status: raw.status ?? [],
     nameservers,
@@ -288,14 +286,87 @@ function normalizeDomain(raw: RdapDomainRaw): NormalizedDomain & { rdap_coverage
   return result;
 }
 
-/** Normalize RDAP IP network response */
-function normalizeIpNetwork(raw: RdapIpNetworkRaw, ip: string): NormalizedIpNetwork {
-  const entities = raw.entities ?? [];
-  const registrant = findEntityByRole(entities, 'registrant');
-  const abuse = findEntityByRole(entities, 'abuse');
-  const orgName = registrant ? entityName(registrant) : undefined;
-  const abuseEmail = abuse ? entityEmail(abuse) : undefined;
+/** Find the first usable abuse email in provider entity order, including nested contacts. */
+function firstAbuseEmail(entities: RdapEntity[]): string | undefined {
+  for (const entity of entities) {
+    const card = entity.vcardArray?.[1];
+    if (entity.roles?.includes('abuse') && Array.isArray(card)) {
+      const email = vcardField(card, 'email', true);
+      if (email !== undefined) return email;
+    }
+    if (entity.entities) {
+      const nested = firstAbuseEmail(entity.entities);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return;
+}
 
+/** RIPE assigns the registrant role to maintainers as well as organizations. */
+function rirOrganization(entities: RdapEntity[], rir: string | undefined): string | undefined {
+  if (rir === 'RIPE') {
+    for (const entity of entities) {
+      const card = entity.vcardArray?.[1];
+      if (
+        entity.roles?.includes('registrant') &&
+        Array.isArray(card) &&
+        vcardField(card, 'kind') === 'org'
+      ) {
+        const name = vcardField(card, 'fn', true);
+        if (name !== undefined) return name;
+      }
+    }
+    return;
+  }
+  const registrant = findEntityByRole(entities, 'registrant');
+  return registrant ? entityName(registrant) : undefined;
+}
+
+/** Normalize shared evidence from the queried IP or ASN object. */
+function rirObjectEvidence(raw: RdapIpNetworkRaw | RdapAutnumRaw, responseUrl: string) {
+  const self = raw.links?.find((link) => link.rel === 'self')?.href;
+  const rir = self ? rirFromUrl(self) : undefined;
+  const entities = raw.entities ?? [];
+  const orgName = rirOrganization(entities, rir ?? rirFromUrl(responseUrl));
+  const abuseEmail = firstAbuseEmail(entities);
+  const country = raw.country;
+  const normalizedCountry =
+    country?.length === 2 && /^[a-zA-Z]{2}$/.test(country) ? country.toUpperCase() : country;
+  let registrationDate: string | undefined;
+  let lastChanged: string | undefined;
+  for (const event of raw.events ?? []) {
+    if (typeof event?.eventDate !== 'string' || !event.eventDate.trim()) continue;
+    if (event.eventAction === 'registration') registrationDate ??= event.eventDate;
+    if (event.eventAction === 'last changed') lastChanged ??= event.eventDate;
+    if (registrationDate !== undefined && lastChanged !== undefined) break;
+  }
+  return {
+    rir,
+    fields: {
+      ...(normalizedCountry != null ? { country: normalizedCountry } : {}),
+      ...(orgName !== undefined ? { org_name: orgName } : {}),
+      ...(abuseEmail !== undefined ? { abuse_email: abuseEmail } : {}),
+      ...(registrationDate !== undefined ? { registration_date: registrationDate } : {}),
+      ...(lastChanged !== undefined ? { last_changed: lastChanged } : {}),
+    },
+  };
+}
+
+/** Require a response object while allowing sparse registry records. */
+function rirResponseObject(raw: unknown): object {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw serviceUnavailable('RIR RDAP returned an invalid response object.');
+  }
+  return raw;
+}
+
+/** Normalize RDAP IP network response */
+function normalizeIpNetwork(
+  raw: RdapIpNetworkRaw,
+  ip: string,
+  responseUrl: string,
+): NormalizedIpNetwork {
+  const { rir, fields } = rirObjectEvidence(raw, responseUrl);
   const cidrs = (raw.cidr0_cidrs ?? []).flatMap((component) => {
     const prefix = component.v4prefix ?? component.v6prefix;
     return prefix !== undefined && component.length !== undefined
@@ -303,13 +374,11 @@ function normalizeIpNetwork(raw: RdapIpNetworkRaw, ip: string): NormalizedIpNetw
       : [];
   });
 
-  const selfLink = raw.links?.find((l) => l.rel === 'self')?.href ?? '';
-  const rdapSource = rirFromSelfLink(selfLink);
-
   const result: NormalizedIpNetwork = {
     ip,
     cidrs,
     ...(cidrs.length === 1 ? { cidr: cidrs.join() } : {}),
+    ...fields,
     ptr: null,
     ptr_status: 'not_found',
   };
@@ -320,32 +389,21 @@ function normalizeIpNetwork(raw: RdapIpNetworkRaw, ip: string): NormalizedIpNetw
   if (raw.ipVersion !== undefined) result.ip_version = raw.ipVersion;
   if (raw.name !== undefined) result.name = raw.name;
   if (raw.type !== undefined) result.type = raw.type;
-  if (raw.country !== undefined && raw.country !== null) result.country = raw.country;
-  if (orgName !== undefined) result.org_name = orgName;
-  if (abuseEmail !== undefined) result.abuse_email = abuseEmail;
-  if (rdapSource !== undefined) result.rdap_source = rdapSource;
+  if (rir !== undefined) result.rdap_source = rir;
 
   return result;
 }
 
 /** Normalize RDAP autnum (ASN) response */
-function normalizeAutnum(raw: RdapAutnumRaw, asn: string): NormalizedAsn {
-  const entities = raw.entities ?? [];
-  const registrant = findEntityByRole(entities, 'registrant');
-  const orgName = registrant ? entityName(registrant) : undefined;
-
-  const selfLink = raw.links?.find((l) => l.rel === 'self')?.href ?? '';
-  const rir = rirFromSelfLink(selfLink);
-
-  const result: NormalizedAsn = { asn };
+function normalizeAutnum(raw: RdapAutnumRaw, asn: string, responseUrl: string): NormalizedAsn {
+  const { rir, fields } = rirObjectEvidence(raw, responseUrl);
+  const result: NormalizedAsn = { asn, ...fields };
 
   if (raw.handle !== undefined) result.handle = raw.handle;
   if (raw.startAutnum !== undefined) result.start_autnum = raw.startAutnum;
   if (raw.endAutnum !== undefined) result.end_autnum = raw.endAutnum;
   if (raw.name !== undefined) result.name = raw.name;
   if (raw.type !== undefined) result.type = raw.type;
-  if (raw.country !== undefined && raw.country !== null) result.country = raw.country;
-  if (orgName !== undefined) result.org_name = orgName;
   if (rir !== undefined) result.rir = rir;
 
   return result;
@@ -354,6 +412,18 @@ function normalizeAutnum(raw: RdapAutnumRaw, asn: string): NormalizedAsn {
 /** True when the error is an RDAP 404 — the queried object does not exist upstream. */
 function isRdapNotFound(err: unknown): boolean {
   return err instanceof McpError && err.data?.status === 404;
+}
+
+/** Suggest an ICANN parent only for a name below an inferred registration boundary. */
+export function icannRegistrableParent(domain: string): string | undefined {
+  const suffix = parse(domain, { allowPrivateDomains: false });
+  if (suffix.isIcann && suffix.domain && suffix.subdomain) return suffix.domain;
+  return;
+}
+
+/** Identify an exact registry-record miss without treating operational errors as absence. */
+export function isDomainNotFound(error: unknown): error is McpError {
+  return error instanceof McpError && error.data?.reason === 'domain_not_found';
 }
 
 // ─── Service class ────────────────────────────────────────────────────────────
@@ -509,7 +579,7 @@ export class RdapService {
           isTransient: (err: unknown) => !isRdapNotFound(err),
         },
       );
-      const record = normalizeDomain(primaryDomain(raw, domain));
+      const record = normalizeDomain(primaryDomain(raw, domain), domain);
       ctx.signal.throwIfAborted();
       if (includeRegistrar) record.registrar_detail = await this.registrarDetail(raw, domain, ctx);
       return record;
@@ -607,15 +677,12 @@ export class RdapService {
     | { available: false; registration_status: 'registered'; record: NormalizedDomain }
     | { available: null; registration_status: 'unknown'; rdap_coverage: false }
   > {
-    const suffix = parse(domain, { allowPrivateDomains: false });
-    if (suffix.isIcann && suffix.domain && suffix.subdomain) {
-      throw validationError(
-        `"${domain}" is a subdomain; its registrable parent is "${suffix.domain}".`,
-        {
-          reason: 'non_registrable_domain',
-          registrable_parent: suffix.domain,
-        },
-      );
+    const parent = icannRegistrableParent(domain);
+    if (parent) {
+      throw validationError(`"${domain}" is a subdomain; its registrable parent is "${parent}".`, {
+        reason: 'non_registrable_domain',
+        registrable_parent: parent,
+      });
     }
     const rdapServer = await this.findDomainRdapServer(domain, ctx);
 
@@ -648,7 +715,7 @@ export class RdapService {
       );
 
       ctx.signal.throwIfAborted();
-      const record = normalizeDomain(primaryDomain(raw, domain));
+      const record = normalizeDomain(primaryDomain(raw, domain), domain);
       return { available: false, registration_status: 'registered', record };
     } catch (err) {
       // Preserve record absence independently of registration eligibility.
@@ -694,14 +761,14 @@ export class RdapService {
     const url = `${rdapServer}/ip/${base}`;
 
     try {
-      const raw = await withRetry(
+      const { raw, responseUrl } = await withRetry(
         async () => {
           const response = await fetchWithTimeout(url, config.rdapTimeoutMs, ctx, {
             headers: { Accept: 'application/rdap+json, application/json' },
             signal: ctx.signal,
             expectedStatuses: [404],
           });
-          return response.json() as Promise<RdapIpNetworkRaw>;
+          return { raw: await response.json(), responseUrl: response.url };
         },
         {
           operation: 'rdap.lookupIp',
@@ -714,7 +781,7 @@ export class RdapService {
         },
       );
 
-      return normalizeIpNetwork(raw, ip);
+      return normalizeIpNetwork(rirResponseObject(raw) as RdapIpNetworkRaw, ip, responseUrl);
     } catch (err) {
       // RDAP 404 on an IP lookup means no netblock record exists upstream
       if (isRdapNotFound(err)) {
@@ -753,14 +820,14 @@ export class RdapService {
     const url = `${rdapServer}/autnum/${asnNum}`;
 
     try {
-      const raw = await withRetry(
+      const { raw, responseUrl } = await withRetry(
         async () => {
           const response = await fetchWithTimeout(url, config.rdapTimeoutMs, ctx, {
             headers: { Accept: 'application/rdap+json, application/json' },
             signal: ctx.signal,
             expectedStatuses: [404],
           });
-          return response.json() as Promise<RdapAutnumRaw>;
+          return { raw: await response.json(), responseUrl: response.url };
         },
         {
           operation: 'rdap.lookupAsn',
@@ -773,7 +840,7 @@ export class RdapService {
         },
       );
 
-      return normalizeAutnum(raw, `AS${asnNum}`);
+      return normalizeAutnum(rirResponseObject(raw) as RdapAutnumRaw, `AS${asnNum}`, responseUrl);
     } catch (err) {
       // RDAP 404 on an ASN lookup means the ASN is not registered upstream
       if (isRdapNotFound(err)) {

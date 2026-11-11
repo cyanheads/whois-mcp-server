@@ -2,9 +2,9 @@
 
 **Server:** whois-mcp-server
 **Version:** 0.2.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -65,7 +65,7 @@ export const whoisLookupDomain = tool('whois_lookup_domain', {
   errors: [
     { reason: 'rdap_no_coverage', code: JsonRpcErrorCode.NotFound,
       when: 'TLD has no RDAP server in IANA bootstrap',
-      recovery: 'Use whois_check_availability instead or try a different TLD.' },
+      recovery: 'Use whois_get_dns for DNS evidence; it cannot establish registration status.' },
     { reason: 'domain_not_found', code: JsonRpcErrorCode.NotFound,
       when: 'RDAP returned 404 — no registry object found',
       recovery: 'Use whois_check_availability for record status; no eligibility guarantee is implied.' },
@@ -230,7 +230,7 @@ src/
     tools/definitions/
       whois-lookup-domain.tool.ts       # Domain registration record via RDAP
       whois-check-availability.tool.ts  # Registry record status; no eligibility guarantee
-      whois-get-dns.tool.ts             # DNS records via DoH (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR)
+      whois-get-dns.tool.ts             # DNS records via DoH, including SRV, DS, DNSKEY, TLSA, HTTPS
       whois-lookup-ip.tool.ts           # IP/CIDR netblock, org, abuse contact via RIR RDAP
       whois-lookup-asn.tool.ts          # ASN to org/RIR resolution via RIR RDAP
       whois-get-dossier.tool.ts         # One-call domain triage — registration + DNS in parallel
@@ -242,17 +242,19 @@ src/
 
 ## Lookup Contracts
 
-Registry object absence never establishes registration eligibility. `whois_check_availability` reports `registration_status: registered | not_found | unknown`, with `available: false` only for a found record and null otherwise. ICANN-only suffix recognition rejects known subdomains without silently querying their parent; private suffixes do not create registry boundaries.
+Registry object absence never establishes registration eligibility. `whois_check_availability` reports `registration_status: registered | not_found | unknown`, with `available: false` only for a found record and null otherwise. Its ICANN-only suffix recognition rejects known subdomains without silently querying their parent; private suffixes do not create registry boundaries. Exact domain lookup and dossier preserve valid exact RDAP records below an inferred parent. Only an exact 404 permits a dossier parent fallback, attributed as `registration_domain` while DNS stays on `domain`; exact lookup instead names the parent as a next query. No-coverage recovery offers DNS evidence without asserting registration status.
 
 Registrant org comes from jCard `org`; personal `fn` is not organization data. Explicit registrant redaction and missing evidence yield true and null respectively; public org survives independently. DNSSEC preserves provider `delegationSigned`, with missing/no-coverage evidence null. Domain and dossier formatters render unknown states explicitly. Optional `include_registrar` detail stays nested, never overriding registry authority; one referral, no retry/recursion, five guarded redirects and one total RDAP deadline. Destination checks are best-effort against DNS rebinding.
 
-DNS owner syntax separately permits underscores and one normalized root dot. Failure RCODEs and truncated replies never become empty successes; CAA does not repeat NextDNS as fallback, and cancellation starts no further requests. TXT uses complete literal fences, not an injection boundary. PTR selects only reachable owner-matched records, allows five aliases under one DNS deadline, and discloses found/not_found/failed plus failure detail. IP output retains all ordered `cidrs`, with scalar `cidr` only for one component. A missing IANA route is non-retryable `ip_no_rdap_route`; bootstrap fetch failure stays operational.
+DNS owner syntax separately permits underscores and one normalized root dot. SRV, DS, DNSKEY, TLSA and HTTPS use the ordinary Cloudflare-first/NextDNS-fallback path and preserve literal RDATA. Failure RCODEs and truncated replies never become empty successes; CAA does not repeat NextDNS as fallback, and cancellation starts no further requests. TXT uses complete literal fences, not an injection boundary. PTR selects only reachable owner-matched records, allows five aliases under one DNS deadline, and discloses found/not_found/failed plus failure detail. IP output retains all ordered `cidrs`, with scalar `cidr` only for one component. A missing IANA route is non-retryable `ip_no_rdap_route`; bootstrap fetch failure stays operational.
 
 Primary domain objects must carry matching identity (case/IDNA equivalent), reject error envelopes and explicitly wrong classes, and accept sparse name-only records. Invalid objects are `rdap_invalid_domain_response`, not registration evidence. NXDOMAIN retains supported preceding aliases; PTR remains terminal on NXDOMAIN. Dossier null MX stays `0 .` with an explicit no-mail label and no provider. Provider strings use literal fences where Markdown would alter punctuation/spacing; structured strings stay unchanged.
 
 `whois_lookup_ip` optionally accepts `include_routing: true`: one RIPEstat Network Info request, after successful primary RDAP and parallel with PTR, under one fixed 3000 ms deadline covering headers and body, with no retries or ASN-detail fan-out. Nested routing is separately attributed RIS eight-hour-dump observation, never registry ownership; found, empty and failed outcomes remain distinct. Omitted/false adds no routing request. Optional failure retains primary data; cancellation propagates.
 
-Serialized patterns are the syntax gate (`InvalidParams`/`invalid_arguments`); IP/ASN semantic parsing and exclusions retain typed reasons. Preserve existing ASN whitespace/plus/zero-padding and CIDR padding without arbitrary input ceilings. See `docs/design.md` for the domain decisions.
+Domain tools share strict IDNA normalization, returning ASCII `domain` and optional `unicode_domain` as decoded display. Validate converted label/name lengths and every supplied registry identity; URL syntax must never become a matching name through truncation. Preserve DNS's separate underscore/root-dot/case behavior and valid numeric-label spellings. Serialized patterns remain useful lexical gates; normalization failures are `InvalidParams`/`invalid_arguments`. IP/ASN semantic parsing and exclusions retain typed reasons. Preserve existing ASN whitespace/plus/zero-padding and CIDR padding without arbitrary input ceilings. See `docs/design.md` for the domain decisions.
+
+RIPE IP/ASN `org_name` comes from a direct organization registrant, never a maintainer or a nested contact's organization. Other RIR organization extraction stays compatible. ASN abuse contacts may be nested; IP/ASN `registration_date` and `last_changed` use top-level object events and preserve provider timestamps. Missing evidence is omitted. Supplied two-letter country codes are uppercase. Dossier NS/MX inference retains first-record selection, with an ICANN registrable-label fallback.
 
 ## Naming
 
@@ -267,9 +269,11 @@ Serialized patterns are the syntax gate (`InvalidParams`/`invalid_arguments`); I
 
 ## Skills
 
-Skills are modular instructions in `framework-skills/` at the project root. Read them directly when a task matches — e.g., `framework-skills/add-tool/SKILL.md` when adding a tool. `bun run list-skills` prints the full registry. The directory is deliberately not `skills/`: Claude Code and Codex auto-load a plugin's root `skills/`, so a server that ships `.claude-plugin/` or `.codex-plugin/` would hand these development skills to every agent that installs it. Keep `skills/` free for skills meant for those agents.
+Read development skills in `framework-skills/` when a task matches. For example, read `framework-skills/add-tool/SKILL.md` when adding a tool. `bun run list-skills` prints the registry. `init` and `maintenance` manage the framework copies.
 
-**Agent skill directory:** Copy skills into the directory your agent discovers (Claude Code: `.claude/skills/`, others: equivalent). Skills then load as context without referencing `framework-skills/` paths. After framework updates, run the `maintenance` skill — Phase B re-syncs the agent directory.
+Root `skills/` contains `whois-guide`, caller guidance for registration, DNS and routing investigations. Plugin installs, the npm package, the Docker image and the MCPB bundle deliver it; `createApp({ skills: 'skills' })` also serves `skill://whois-guide/SKILL.md`. Use `add-skill` to author caller guidance and `lint:packaging` to validate the tree.
+
+**Agent skill directory.** Copy `framework-skills/` into the directory your development agent discovers, such as `.claude/skills/`. The `maintenance` skill re-syncs that directory in Phase B.
 
 Available skills:
 
@@ -281,6 +285,7 @@ Available skills:
 | `add-app-tool` | Scaffold an MCP App tool + paired UI resource |
 | `add-resource` | Scaffold a new resource definition |
 | `add-prompt` | Scaffold a new prompt definition |
+| `add-skill` | Author and validate a skill for callers of the server in root `skills/` |
 | `add-service` | Scaffold a new service integration |
 | `add-test` | Scaffold test file for a tool, resource, or service |
 | `field-test` | Exercise tools/resources/prompts with real inputs, verify behavior, report issues |
@@ -328,7 +333,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run audit:fix` | `bun audit fix` — upgrade vulnerable packages to the lowest safe version within existing ranges (`--dry-run` previews, `--latest` rewrites ranges). First response when `devcheck` flags a transitive advisory; then `bun update <name>`, then `bun dedupe` |
 | `bun run audit:refresh` | Delete `bun.lock` and reinstall. Last resort after `audit:fix`, `bun update <name>`, and `bun dedupe` — re-resolves every ranged dep (the framework pin included) and rewrites the lockfile as `lockfileVersion: 2` |
 | `bun run lint:mcp` | Run the MCP definition linter standalone (rule catalog: `api-linter` skill) |
-| `bun run lint:packaging` | Packaging surface checks — `server.json`/`manifest.json` env-var parity (run by devcheck) |
+| `bun run lint:packaging` | Check registry and bundle env-var parity, `.mcpbignore` coverage, plugin manifests, and the published `skills/` tree |
 | `bun run list-skills` | Print the skill registry |
 | `bun run tree` | Generate directory structure doc |
 | `bun run format` | Auto-fix formatting (safe fixes only) |
@@ -346,7 +351,9 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-`npm run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips two classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `SKILL.md`) and platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+`bun run bundle` produces a stdio `.mcpb` extension for Claude Desktop. The packer uses `.mcpbignore`. Give each root development path an anchored pattern such as `/docs/` to preserve matching paths in dependencies. Root `skills/` ships in the bundle.
+
+`scripts/clean-mcpb.ts` prunes dev dependencies and removes dependency-shipped agent documentation, platform-specific native bindings, node-gyp build output, and build-only framework files. A nested `skills/` directory can contain runtime modules and stays in the bundle.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, that every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"` (the host substitutes nothing else — `"${X}"` reaches the server as that literal string), and that an optional string option carries `"default": ""`.
 
@@ -417,3 +424,6 @@ import { getMyService } from '@/services/my-domain/my-service.js';
 - [ ] `.codex-plugin/mcp.json` updated — server name key is the unscoped repo name; every user-supplied variable (API key, contact email, instance URL) is listed in `env_vars` so Codex forwards it from the user's environment. Never write `"KEY": ""` into `env` — an empty value replaces the user's exported key and is read as unset
 - [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `author`, `repository`, `license`, `keywords` from `package.json`; inline `mcpServers` entry keyed by the unscoped repo name. Every user-supplied variable is declared under `userConfig` (`type`, `title`, `description`; `sensitive: true` for keys and tokens; `required: true` or `default: ""`) and referenced from `env` as `"KEY": "${user_config.<option>}"` — mirror the `user_config` block in `manifest.json`. Never write `"KEY": ""` into `env`
 - [ ] `npm run devcheck` passes
+- [ ] Keep `plugin.json` and `mcp.json` aligned with `package.json` and the Codex MCP overlay. Put fixed environment values in root `mcp.json`. Forward user-supplied values through the Codex overlay's `env_vars` and retain its `mcpServers` pointer.
+- [ ] Add an anchored `.mcpbignore` pattern for each new root development path. Run `bun run bundle` and `bun run lint:packaging`.
+- [ ] When publishing a root skill, field-test its gates and identifier sources against the tools and run `bun run lint:packaging`.

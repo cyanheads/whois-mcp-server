@@ -1,6 +1,6 @@
 # whois-mcp-server - Directory Structure
 
-Generated on: 2026-10-16 16:55:52
+Generated on: 2026-11-11 09:03:17
 
 ```text
 whois-mcp-server/
@@ -38,6 +38,8 @@ whois-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -135,6 +137,9 @@ whois-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── whois-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -163,14 +168,18 @@ whois-mcp-server/
 │   │   └── routing/
 │   │       └── routing-service.ts
 │   ├── app.ts
+│   ├── domain-name.ts
 │   └── index.ts
 ├── tests/
 │   ├── fixtures/
 │   │   ├── apnic-not-found.json
+│   │   ├── apnic-research-ip.json
 │   │   ├── arin-test-net.json
 │   │   ├── iana-ipv4.json
 │   │   ├── iana-ipv6.json
-│   │   └── README.md
+│   │   ├── README.md
+│   │   ├── ripe-hetzner-asn.json
+│   │   └── ripe-hetzner-ip.json
 │   ├── helpers/
 │   │   └── upstream.ts
 │   ├── prompts/
@@ -193,7 +202,8 @@ whois-mcp-server/
 │   │   ├── whois-lookup-asn.tool.test.ts
 │   │   ├── whois-lookup-domain.tool.test.ts
 │   │   └── whois-lookup-ip.tool.test.ts
-│   └── app.test.ts
+│   ├── app.test.ts
+│   └── domain-name.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitattributes
@@ -209,7 +219,9 @@ whois-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

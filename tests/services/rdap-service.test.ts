@@ -363,6 +363,162 @@ describe('RDAP evidence regressions', () => {
   });
 });
 
+describe('RIR object evidence', () => {
+  let http: ReturnType<typeof upstream>;
+  afterEach(() => {
+    http?.restore();
+    vi.restoreAllMocks();
+  });
+
+  const ripeOrg = {
+    roles: ['registrant'],
+    vcardArray: [
+      'vcard',
+      [
+        ['kind', {}, 'text', 'org'],
+        ['fn', {}, 'text', 'Example Org'],
+      ],
+    ],
+  };
+  const ripeMaintainer = {
+    roles: ['registrant'],
+    vcardArray: [
+      'vcard',
+      [
+        ['kind', {}, 'text', 'individual'],
+        ['fn', {}, 'text', 'EXAMPLE-MNT'],
+      ],
+    ],
+  };
+
+  it.each([
+    { label: 'maintainer first', entities: [ripeMaintainer, ripeOrg] },
+    { label: 'organization first', entities: [ripeOrg, ripeMaintainer] },
+  ])('selects the direct RIPE organization with $label', async ({ entities }) => {
+    http = upstream({
+      rdap: () =>
+        Response.json({
+          entities,
+          links: [{ rel: 'self', href: 'https://rdap.db.ripe.net/ip/8.8.8.8' }],
+        }),
+    });
+    const result = await new RdapService().lookupIp('8.8.8.8', createMockContext());
+    expect(result.org_name).toBe('Example Org');
+  });
+
+  it('uses the final response host for RIPE entity selection when self is unusable', async () => {
+    http = upstream({
+      rdap: () => {
+        const response = Response.json({
+          entities: [ripeMaintainer, ripeOrg],
+          links: [{ rel: 'self', href: 'https://ripe.net.evil.example/' }],
+        });
+        Object.defineProperty(response, 'url', { value: 'https://rdap.db.ripe.net/autnum/24940' });
+        return response;
+      },
+    });
+    const result = await new RdapService().lookupAsn('24940', createMockContext());
+    expect(result.org_name).toBe('Example Org');
+    expect(result).not.toHaveProperty('rir');
+  });
+
+  it.each([
+    ['ie', 'IE'],
+    ['dE', 'DE'],
+    ['US', 'US'],
+    [undefined, undefined],
+    [null, undefined],
+  ])('normalizes country %s without inventing evidence', async (country, expected) => {
+    http = upstream({ rdap: () => Response.json({ country }) });
+    const ctx = createMockContext();
+    const service = new RdapService();
+    for (const result of [
+      await service.lookupIp('8.8.8.8', ctx),
+      await service.lookupAsn('24940', ctx),
+    ]) {
+      if (expected) expect(result).toHaveProperty('country', expected);
+      else expect(result).not.toHaveProperty('country');
+    }
+  });
+
+  it('finds the first usable abuse email across cards and nested entities', async () => {
+    http = upstream({
+      rdap: () =>
+        Response.json({
+          entities: [
+            { roles: ['abuse'], vcardArray: ['vcard', [['email', {}, 'text', '']]] },
+            {
+              roles: ['registrant'],
+              entities: [
+                {
+                  roles: ['technical'],
+                  vcardArray: ['vcard', [['email', {}, 'text', 'tech@example.com']]],
+                  entities: [
+                    {
+                      roles: ['abuse'],
+                      vcardArray: [
+                        'vcard',
+                        [
+                          ['email', {}, 'text', '  '],
+                          ['email', {}, 'text', 42],
+                          ['email', {}, 'text', 'abuse@example.com'],
+                        ],
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+            {
+              roles: ['abuse'],
+              vcardArray: ['vcard', [['email', {}, 'text', 'later@example.com']]],
+            },
+          ],
+        }),
+    });
+    const ctx = createMockContext();
+    const service = new RdapService();
+    expect((await service.lookupAsn('24940', ctx)).abuse_email).toBe('abuse@example.com');
+    expect((await service.lookupIp('8.8.8.8', ctx)).abuse_email).toBe('abuse@example.com');
+  });
+
+  it.each([
+    { events: [], expected: {} },
+    {
+      events: [{ eventAction: 'last update of RDAP database', eventDate: '2026-11-11T00:00:00Z' }],
+      expected: {},
+    },
+    {
+      events: [{ eventAction: 'last changed', eventDate: '2020-04-02T11:30:00+05:30' }],
+      expected: { last_changed: '2020-04-02T11:30:00+05:30' },
+    },
+    {
+      events: [
+        { eventAction: 'registration', eventDate: 42 },
+        { eventAction: 'registration', eventDate: '1970-01-01T00:00:00Z' },
+        { eventAction: 'last changed', eventDate: '' },
+      ],
+      expected: { registration_date: '1970-01-01T00:00:00Z' },
+    },
+  ])('uses only the queried object events: $expected', async ({ events, expected }) => {
+    http = upstream({
+      rdap: () =>
+        Response.json({
+          events,
+          entities: [
+            {
+              roles: ['technical'],
+              vcardArray: ['vcard', [['email', {}, 'text', 'tech@example.com']]],
+              events: [{ eventAction: 'registration', eventDate: '2010-11-11T00:00:00Z' }],
+            },
+          ],
+        }),
+    });
+    const result = await new RdapService().lookupAsn('24940', createMockContext());
+    expect(result).toEqual({ asn: 'AS24940', ...expected });
+  });
+});
+
 describe('optional registrar detail (#25)', () => {
   let http: ReturnType<typeof createFetchMock>;
   let dnsAddresses: string[] = [];

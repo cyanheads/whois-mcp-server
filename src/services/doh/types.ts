@@ -3,21 +3,26 @@
  * @module services/doh/types
  */
 
-/** DNS record types supported by the server */
-export type DnsRecordType = 'A' | 'AAAA' | 'MX' | 'TXT' | 'NS' | 'CNAME' | 'SOA' | 'CAA' | 'PTR';
-
 /** DNS type numeric codes */
-export const DNS_TYPE_NUMBERS: Record<DnsRecordType, number> = {
+export const DNS_TYPE_NUMBERS = {
   A: 1,
+  AAAA: 28,
+  MX: 15,
+  TXT: 16,
   NS: 2,
   CNAME: 5,
   SOA: 6,
-  PTR: 12,
-  MX: 15,
-  TXT: 16,
-  AAAA: 28,
   CAA: 257,
-};
+  PTR: 12,
+  SRV: 33,
+  DS: 43,
+  DNSKEY: 48,
+  TLSA: 52,
+  HTTPS: 65,
+} as const;
+
+/** DNS record types supported by the server */
+export type DnsRecordType = keyof typeof DNS_TYPE_NUMBERS;
 
 /** Raw DNS answer from DoH JSON API */
 export interface DohAnswer {

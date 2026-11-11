@@ -37,14 +37,9 @@ export const appOptions = {
   ],
   resources: [],
   prompts: [],
+  skills: 'skills',
   instructions:
-    'whois-mcp-server: domain and IP intelligence via RDAP and DNS-over-HTTPS. No API keys required.\n' +
-    '- whois_lookup_domain: registry record; include_registrar opts into separate registrar contact detail\n' +
-    '- whois_check_availability: registered/not_found/unknown RDAP record status; absence does not establish registration eligibility\n' +
-    '- whois_get_dns: ASCII DNS owner names, including underscores and one root dot (A, AAAA, MX, TXT, NS, CNAME, SOA, CAA, PTR)\n' +
-    '- whois_lookup_ip: IP/CIDR ownership and PTR; include_routing adds RIS-observed prefix/origin ASNs for whois_lookup_asn, separate from ownership\n' +
-    '- whois_lookup_asn: ASN to org/RIR resolution\n' +
-    '- whois_get_dossier: domain triage with partial source errors; absent DNSSEC/privacy evidence stays unknown',
+    'Keyless RDAP and DNS-over-HTTPS lookups. Use whois_lookup_domain for an exact registry record or whois_get_dossier for combined registration and DNS triage. A dossier can attribute registration to a parent while DNS stays on the queried name. RDAP record absence does not establish eligibility, and missing coverage, failed sources, or absent DNSSEC and privacy evidence leave those findings unknown. For routing, opt in on whois_lookup_ip and pass returned origin ASNs to whois_lookup_asn. Attribute RIS observations separately from registry allocation.',
   setup(core) {
     getServerConfig();
     initRdapService(core.config, core.storage);

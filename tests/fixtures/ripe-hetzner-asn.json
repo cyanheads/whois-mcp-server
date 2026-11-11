@@ -1,0 +1,24 @@
+{
+  "links": [{ "rel": "self", "href": "https://rdap.db.ripe.net/autnum/24940" }],
+  "events": [
+    { "eventAction": "registration", "eventDate": "2002-06-03T08:29:26Z" },
+    { "eventAction": "last changed", "eventDate": "2026-06-30T08:33:15Z" }
+  ],
+  "entities": [
+    {
+      "roles": ["registrant"],
+      "vcardArray": ["vcard", [["fn", {}, "text", "HOS-GUN"], ["kind", {}, "text", "individual"]]]
+    },
+    {
+      "roles": ["registrant"],
+      "vcardArray": [
+        "vcard",
+        [["fn", {}, "text", "Hetzner Online GmbH"], ["kind", {}, "text", "org"]]
+      ]
+    },
+    {
+      "roles": ["abuse"],
+      "vcardArray": ["vcard", [["email", { "type": "abuse" }, "text", "abuse@hetzner.com"]]]
+    }
+  ]
+}

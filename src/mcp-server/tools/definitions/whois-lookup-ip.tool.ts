@@ -15,7 +15,7 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
   title: 'IP Address / Network Lookup',
   description:
     'Look up an IP address or CIDR block via RIR RDAP (ARIN, RIPE, APNIC, LACNIC, AFRINIC — auto-routed ' +
-    'via IANA bootstrap). Returns netblock, org, country, all provider CIDRs, abuse contact email, and reverse DNS (PTR) ' +
+    'via IANA bootstrap). Returns netblock, org, country, all provider CIDRs, abuse contact email, object registration and change dates, and reverse DNS (PTR) ' +
     'via DoH. PTR status distinguishes found, not_found, and failed with ptr_source_error. Alias traversal is limited ' +
     'to five transitions under one DNS deadline. The base address is queried for CIDR input. ' +
     'The server excludes IPv4 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.168/16, 255/8 ' +
@@ -94,9 +94,22 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
     country: z
       .string()
       .optional()
-      .describe('Country code (ISO 3166-1 alpha-2). Omitted when not in RDAP data.'),
-    org_name: z.string().optional().describe('Organization name holding the netblock.'),
+      .describe('Country code from RDAP, with two-letter codes normalized to uppercase.'),
+    org_name: z
+      .string()
+      .optional()
+      .describe(
+        'Registrant organization. For RIPE, only a direct organization registrant qualifies.',
+      ),
     abuse_email: z.string().optional().describe('Abuse contact email address.'),
+    registration_date: z
+      .string()
+      .optional()
+      .describe('RDAP registration event timestamp for this network, with its provider offset.'),
+    last_changed: z
+      .string()
+      .optional()
+      .describe('RDAP last changed event timestamp for this network, with its provider offset.'),
     ptr: z
       .string()
       .nullable()
@@ -189,6 +202,9 @@ export const whoisLookupIp = tool('whois_lookup_ip', {
     if (result.country) lines.push(`**Country:** ${literal(result.country)}`);
     if (result.handle) lines.push(`**Handle:** ${literal(result.handle)}`);
     if (result.abuse_email) lines.push(`**Abuse Email:** ${literal(result.abuse_email)}`);
+    if (result.registration_date)
+      lines.push(`**Registration Date:** ${literal(result.registration_date)}`);
+    if (result.last_changed) lines.push(`**Last Changed:** ${literal(result.last_changed)}`);
     lines.push(`**Reverse DNS (PTR):** ${literal(result.ptr ?? 'Not available')}`);
     lines.push(`**PTR Status:** ${result.ptr_status}`);
     if (result.ptr_source_error) lines.push(`**PTR Error:** ${literal(result.ptr_source_error)}`);

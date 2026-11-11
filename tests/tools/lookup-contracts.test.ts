@@ -23,6 +23,32 @@ afterEach(() => {
 });
 
 describe('serialized identifier grammar (#26)', () => {
+  it('advertises extended DNS types while keeping the existing defaults (#39)', () => {
+    const input = z.toJSONSchema(whoisGetDns.input);
+    expect(input.properties?.types).toMatchObject({
+      type: 'array',
+      default: ['A', 'AAAA', 'MX', 'TXT', 'NS'],
+      items: {
+        enum: [
+          'A',
+          'AAAA',
+          'MX',
+          'TXT',
+          'NS',
+          'CNAME',
+          'SOA',
+          'CAA',
+          'PTR',
+          'SRV',
+          'DS',
+          'DNSKEY',
+          'TLSA',
+          'HTTPS',
+        ],
+      },
+    });
+  });
+
   it('rejects an unrepairable registrar boolean before dispatch', async () => {
     http = upstream();
     const result = await runToolContract(whoisLookupDomain, {
@@ -67,7 +93,84 @@ describe('serialized identifier grammar (#26)', () => {
   );
 });
 
+describe('domain IDNA wiring (#40)', () => {
+  it.each([whoisLookupDomain, whoisCheckAvailability, whoisGetDossier, whoisGetDns] as const)(
+    'queries equivalent ASCII and Unicode names through %s',
+    async (definition) => {
+      const ascii = 'xn--e1afmkfd.xn--p1ai';
+      http = upstream({
+        dnsSuffixes: ['xn--p1ai'],
+        rdap: () => Response.json({ ldhName: ascii.toUpperCase() }),
+      });
+      for (const domain of ['ПРИМЕР。РФ', ascii]) {
+        const previousCalls = http.calls.length;
+        const result = await runToolContract(definition, { domain });
+        expect(result.isError).not.toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          domain: ascii,
+          unicode_domain: 'пример.рф',
+        });
+        expect(textOf(result)).toContain('**Unicode Display:** пример.рф');
+        const names = http.calls.slice(previousCalls).flatMap(({ request }) => {
+          const url = new URL(request.url);
+          if (url.hostname === 'rdap.test') return [url.pathname.split('/').at(-1)];
+          const queryName = url.searchParams.get('name');
+          return queryName ? [queryName] : [];
+        });
+        expect(names.length).toBeGreaterThan(0);
+        expect(new Set(names)).toEqual(new Set([ascii]));
+      }
+    },
+  );
+
+  it.each([whoisLookupDomain, whoisCheckAvailability, whoisGetDossier, whoisGetDns] as const)(
+    'rejects malformed ACE before any request through %s',
+    async (definition) => {
+      http = upstream();
+      const result = await runToolContract(definition, { domain: 'xn--a.com' });
+      expect(result.structuredContent).toMatchObject({
+        error: { code: JsonRpcErrorCode.InvalidParams, data: { reason: 'invalid_arguments' } },
+      });
+      expect(textOf(result)).toContain('domain');
+      expect(http.calls).toHaveLength(0);
+    },
+  );
+});
+
 describe('lookup characterization', () => {
+  it('offers DNS evidence for absent RDAP coverage (#37)', async () => {
+    http = upstream({ coverage: false });
+    const result = await runToolContract(whoisLookupDomain, { domain: 'example.de' });
+    const hint =
+      'Use whois_get_dns for DNS evidence or whois_get_dossier for DNS with registration marked unknown. DNS answers cannot establish registration status.';
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.NotFound,
+        data: { reason: 'rdap_no_coverage', recovery: { hint: expect.stringContaining(hint) } },
+      },
+    });
+    expect(textOf(result)).toContain(hint);
+    expect(http.calls).toHaveLength(1);
+  });
+  it('suggests querying the ICANN parent after an exact miss without querying it (#35)', async () => {
+    http = upstream({ rdap: () => new Response(null, { status: 404 }) });
+    const result = await runToolContract(whoisLookupDomain, { domain: 'www.example.com' });
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        code: JsonRpcErrorCode.NotFound,
+        data: {
+          reason: 'domain_not_found',
+          registrable_parent: 'example.com',
+          recovery: { hint: expect.stringContaining('example.com') },
+        },
+      },
+    });
+    expect(textOf(result)).toContain('Query "example.com" with whois_lookup_domain');
+    expect(http.calls.map(({ request }) => new URL(request.url).pathname)).toEqual([
+      '/rdap/dns.json',
+      '/domain/www.example.com',
+    ]);
+  });
   it.each(['15169', 'AS15169', 'as0015169', '+15169', 'AS 15169'])(
     'normalizes working ASN %s',
     async (asn) => {

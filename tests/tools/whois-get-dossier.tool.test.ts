@@ -13,9 +13,10 @@ import type { NormalizedDomain } from '@/services/rdap/types.js';
 
 // --- service mocks ----------------------------------------------------------
 
-vi.mock('@/services/rdap/rdap-service.js', () => {
+vi.mock('@/services/rdap/rdap-service.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/services/rdap/rdap-service.js')>();
   const mockService = { lookupDomain: vi.fn() };
-  return { getRdapService: () => mockService, __mockService: mockService };
+  return { ...actual, getRdapService: () => mockService, __mockService: mockService };
 });
 
 vi.mock('@/services/doh/doh-service.js', () => {

@@ -3,7 +3,7 @@
  * @module tests/tools/dossier-contracts.test
  */
 
-import { runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { whoisGetDossier } from '@/mcp-server/tools/definitions/whois-get-dossier.tool.js';
 import { DNS_TYPE_NUMBERS, type DnsRecordType } from '@/services/doh/types.js';
@@ -32,6 +32,20 @@ function dossier(records: Partial<Record<DnsRecordType, string[]>>) {
 }
 
 describe('dossier characterization', () => {
+  it('keeps an exact third-level .name registration', async () => {
+    http = upstream({
+      dnsSuffixes: ['name'],
+      rdap: () => Response.json({ ldhName: 'joe.example.name' }),
+    });
+    const result = await runToolContract(whoisGetDossier, { domain: 'joe.example.name' });
+    expect(result.structuredContent).toMatchObject({
+      domain: 'joe.example.name',
+      registered: true,
+    });
+    expect(result.structuredContent).not.toHaveProperty('registration_domain');
+    expect(rdapPaths()).toEqual(['/domain/joe.example.name']);
+    expect(textOf(result)).toContain('**Registered (RDAP record):** Found');
+  });
   it('preserves null MX and labels its explicit no-mail meaning (#28)', async () => {
     const result = await dossier({ MX: ['0 .'] });
     expect(result.structuredContent).toMatchObject({ mx_records: ['0 .'], mx_provider: null });
@@ -127,6 +141,149 @@ describe('dossier characterization', () => {
     expect(textOf(result)).toContain('Cloudflare');
     expect(textOf(result)).toContain('**Mail Provider:** example');
   });
+});
+
+function rdapPaths() {
+  return http.calls
+    .map(({ request }) => new URL(request.url).pathname)
+    .filter((path) => path.startsWith('/domain/'));
+}
+
+describe('dossier registration subject (#35)', () => {
+  it.each([true, false])(
+    'preserves exact registration evidence after the fallback budget (found: %s)',
+    async (found) => {
+      const timeout = AbortSignal.timeout.bind(AbortSignal);
+      vi.spyOn(AbortSignal, 'timeout').mockImplementation((durationMs) =>
+        durationMs === 45_000
+          ? AbortSignal.abort(new DOMException('Fallback budget expired', 'TimeoutError'))
+          : timeout(durationMs),
+      );
+      http = upstream({
+        rdap: () =>
+          found
+            ? Response.json({ ldhName: 'www.example.com' })
+            : new Response(null, { status: 404 }),
+      });
+      const result = await runToolContract(whoisGetDossier, { domain: 'www.example.com' });
+      expect(result.structuredContent).toMatchObject({ registered: found, rdap_coverage: true });
+      expect(result.structuredContent).not.toHaveProperty('registration_domain');
+      expect(result.structuredContent).not.toHaveProperty('rdap_source_error');
+      expect(rdapPaths()).toEqual(['/domain/www.example.com']);
+      expect(textOf(result)).toContain(found ? 'record):** Found' : 'record):** Not found');
+    },
+  );
+
+  it.each([
+    ['www.example.com', 'example.com', true],
+    ['nested.example.github.io', 'github.io', false],
+  ] as const)('separates DNS on %s from RDAP on %s', async (domain, parent, registered) => {
+    http = upstream({
+      dnsSuffixes: ['com', 'io'],
+      dns: (_type, url) => {
+        expect(url.searchParams.get('name')).toBe(domain);
+        return Response.json({ Status: 0 });
+      },
+      rdap: (url) =>
+        registered && url.pathname === `/domain/${parent}`
+          ? Response.json({ ldhName: parent })
+          : new Response(null, { status: 404 }),
+    });
+    const result = await runToolContract(whoisGetDossier, { domain });
+    expect(result.structuredContent).toMatchObject({
+      domain,
+      registration_domain: parent,
+      registered,
+      rdap_coverage: true,
+      dns_nxdomain: false,
+    });
+    expect(rdapPaths()).toEqual([`/domain/${domain}`, `/domain/${parent}`]);
+    expect(textOf(result)).toContain(`**Registration Domain:** ${parent}`);
+    expect(textOf(result)).toContain(registered ? 'record):** Found' : 'record):** Not found');
+  });
+
+  it('does not infer a parent for an unknown suffix', async () => {
+    http = upstream({ dnsSuffixes: ['invalid'], rdap: () => new Response(null, { status: 404 }) });
+    const result = await runToolContract(whoisGetDossier, { domain: 'www.example.invalid' });
+    expect(result.structuredContent).toMatchObject({ registered: false, rdap_coverage: true });
+    expect(result.structuredContent).not.toHaveProperty('registration_domain');
+    expect(rdapPaths()).toEqual(['/domain/www.example.invalid']);
+  });
+
+  it('makes no parent request when the exact name has no coverage', async () => {
+    http = upstream({ coverage: false });
+    const result = await runToolContract(whoisGetDossier, { domain: 'www.example.com' });
+    expect(result.structuredContent).toMatchObject({ registered: null, rdap_coverage: false });
+    expect(result.structuredContent).not.toHaveProperty('registration_domain');
+    expect(rdapPaths()).toEqual([]);
+  });
+
+  it.each([false, true])(
+    'retains DNS on registry failure (parent attempted: %s)',
+    async (parent) => {
+      http = upstream({
+        rdap: (url) =>
+          parent && url.pathname === '/domain/www.example.com'
+            ? new Response(null, { status: 404 })
+            : Response.json({ ldhName: 'wrong.com' }),
+      });
+      const result = await runToolContract(whoisGetDossier, { domain: 'www.example.com' });
+      expect(result.structuredContent).toMatchObject({
+        registered: null,
+        rdap_coverage: null,
+        rdap_source_error: expect.stringContaining('matching domain'),
+        dns_nxdomain: false,
+        ...(parent ? { registration_domain: 'example.com' } : {}),
+      });
+      if (!parent) expect(result.structuredContent).not.toHaveProperty('registration_domain');
+      expect(rdapPaths()).toEqual(
+        parent ? ['/domain/www.example.com', '/domain/example.com'] : ['/domain/www.example.com'],
+      );
+      expect(textOf(result)).toContain('**RDAP:** Failed');
+    },
+  );
+
+  it.each([false, true])(
+    'propagates caller cancellation (parent attempted: %s)',
+    async (parent) => {
+      const controller = new AbortController();
+      const reason = new DOMException('Fixture cancellation', 'AbortError');
+      http = upstream({
+        rdap: (url) => {
+          if (!parent || url.pathname === '/domain/example.com') controller.abort(reason);
+          return new Response(null, { status: 404 });
+        },
+      });
+      const ctx = createMockContext({ signal: controller.signal, errors: whoisGetDossier.errors });
+      await expect(whoisGetDossier.handler({ domain: 'www.example.com' }, ctx)).rejects.toBe(
+        reason,
+      );
+      expect(rdapPaths()).toEqual(
+        parent ? ['/domain/www.example.com', '/domain/example.com'] : ['/domain/www.example.com'],
+      );
+    },
+  );
+});
+
+describe('ICANN provider label fallback (#36)', () => {
+  it.each([
+    ['DNS0.BBC.CO.UK.', '10 MAIL.OTHER.CO.UK.', 'bbc', 'other'],
+    ['co.uk.', '10 co.uk.', null, null],
+    ['ns.foo.github.io.', '10 mx.bar.github.io.', 'github', 'github'],
+  ] as const)(
+    'infers from %s and %s without changing the records',
+    async (ns, mx, nsLabel, mxLabel) => {
+      const result = await dossier({ NS: [ns], MX: [mx] });
+      expect(result.structuredContent).toMatchObject({
+        ns_provider: nsLabel,
+        mx_provider: mxLabel,
+        ns_records: [ns.slice(0, -1)],
+        mx_records: [mx.slice(0, -1)],
+      });
+      expect(textOf(result)).toContain(`**NS Provider:** ${nsLabel ?? 'Unknown'}`);
+      expect(textOf(result)).toContain(`**Mail Provider:** ${mxLabel ?? 'None / Unknown'}`);
+    },
+  );
 });
 
 describe('TXT regression #8', () => {

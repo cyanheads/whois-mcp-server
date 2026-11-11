@@ -6,7 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getRdapService } from '@/services/rdap/rdap-service.js';
-import { REGISTRATION_NAME_PATTERN } from './_fqdn.js';
+import { registrationNameInput, requireDomainName, unicodeDomainOutput } from './_fqdn.js';
 import { literal } from './_literal.js';
 
 export const whoisCheckAvailability = tool('whois_check_availability', {
@@ -19,21 +19,12 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
   annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
 
   input: z.object({
-    domain: z
-      .string()
-      .max(253)
-      .regex(
-        REGISTRATION_NAME_PATTERN,
-        'Provide a dot-separated ASCII hostname such as example.com; labels are 1–63 characters, without underscores, whitespace or a root dot.',
-      )
-      .describe(
-        'Fully qualified domain name to check (e.g., "myfuturename.com"). ' +
-          'Must be a valid FQDN — labels separated by dots.',
-      ),
+    domain: registrationNameInput,
   }),
 
   output: z.object({
-    domain: z.string().describe('Normalized domain name checked.'),
+    domain: z.string().describe('Lowercase ASCII domain checked.'),
+    unicode_domain: unicodeDomainOutput,
     registration_status: z
       .enum(['registered', 'not_found', 'unknown'])
       .describe(
@@ -70,33 +61,29 @@ export const whoisCheckAvailability = tool('whois_check_availability', {
   ],
 
   async handler(input, ctx) {
-    ctx.log.info('RDAP availability check', { domain: input.domain });
+    const normalized = requireDomainName(input.domain, 'registration');
+    const domain = normalized.domain.toLowerCase();
+    ctx.log.info('RDAP availability check', { domain });
 
-    const result = await getRdapService().checkAvailability(input.domain, ctx);
+    const result = await getRdapService().checkAvailability(normalized.domain, ctx);
 
-    if (result.registration_status !== 'registered') {
-      return {
-        domain: input.domain.toLowerCase(),
-        available: null,
-        registration_status: result.registration_status,
-        rdap_coverage: result.rdap_coverage,
-      };
-    }
-
-    // Registered
+    const registered = result.registration_status === 'registered';
     return {
-      domain: result.record.domain,
-      available: false as const,
+      ...normalized,
+      domain,
+      available: result.available,
       registration_status: result.registration_status,
-      rdap_coverage: true,
-      registrar: result.record.registrar,
-      expiry_date: result.record.expiry_date,
+      rdap_coverage: registered ? true : result.rdap_coverage,
+      ...(registered
+        ? { registrar: result.record.registrar, expiry_date: result.record.expiry_date }
+        : {}),
     };
   },
 
   format: (result) => {
     const lines: string[] = [];
     lines.push(`# Domain: ${result.domain}`);
+    if (result.unicode_domain) lines.push(`**Unicode Display:** ${literal(result.unicode_domain)}`);
 
     lines.push(`**Registration Status:** ${result.registration_status}`);
     lines.push(

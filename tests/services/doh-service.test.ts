@@ -360,6 +360,116 @@ describe('DoH characterization', () => {
   });
 });
 
+describe('extended DoH record types (#39)', () => {
+  it.each([
+    [
+      'SRV',
+      33,
+      '_xmpp-server._tcp.example.com',
+      ['30 30 5269 Xmpp.Example.com'],
+      ['30 30 5269 Xmpp.Example.com.'],
+    ],
+    [
+      'DS',
+      43,
+      'example.com',
+      ['2371 13 2 32996839a6d808afe3eb'],
+      ['2371 13 2 32996839A6D808AFE3EB'],
+    ],
+    [
+      'DNSKEY',
+      48,
+      'example.com',
+      ['256 3 13 oJMRESz5E4gYzS/q==', '257 3 13 mdsswUyr3DPW+Q=='],
+      ['257 3 13 mdsswUyr3DPW+Q==', '256 3 13 oJMRESz5E4gYzS/q=='],
+    ],
+    [
+      'TLSA',
+      52,
+      '_25._tcp.mail.example.com',
+      ['3 1 1 ( 38A88126A15AE8E643CE )'],
+      ['3 1 1 38a88126a15ae8e643ce'],
+    ],
+    [
+      'HTTPS',
+      65,
+      'example.com',
+      ['1 . alpn=h3,h2 ipv4hint=192.0.2.1'],
+      ['1 . alpn="h3,h2" ipv4hint="192.0.2.1"'],
+    ],
+  ] as const)(
+    'maps %s answers from either resolver without changing RDATA',
+    async (type, code, domain, primaryData, fallbackData) => {
+      let fallback = false;
+      const makeAnswers = (values: readonly string[]) =>
+        values.map((data) => ({ type: code, name: `${domain}.`, TTL: 60, data }));
+      http = upstream({
+        dns: (_type, url) => {
+          if (url.hostname === 'dns.nextdns.io')
+            return Response.json({ Status: 0, Answer: makeAnswers(fallbackData) });
+          if (fallback) return new Response(null, { status: 400 });
+          return Response.json({ Status: 0, Answer: makeAnswers(primaryData) });
+        },
+      });
+      for (const source of ['cloudflare', 'nextdns'] as const) {
+        fallback = source === 'nextdns';
+        const values = fallback ? fallbackData : primaryData;
+        const result = await new DohService().lookup(domain, [type, type], createMockContext());
+        expect(result).toEqual({
+          domain,
+          nxdomain: false,
+          source,
+          query_sources: [{ type, source }],
+          records: values.map((data) => ({ type, name: `${domain}.`, ttl: 60, data })),
+        });
+        const text = textOf({ content: whoisGetDns.format!(whoisGetDns.output.parse(result)) });
+        expect(text).toContain(`${type}: ${source}`);
+        for (const data of values) expect(text).toContain(data);
+      }
+      expect(
+        http.calls.map(({ request }) => {
+          const url = new URL(request.url);
+          return [url.hostname, url.searchParams.get('name'), url.searchParams.get('type')];
+        }),
+      ).toEqual([
+        ['cloudflare-dns.com', domain, type],
+        ['cloudflare-dns.com', domain, type],
+        ['dns.nextdns.io', domain, type],
+      ]);
+    },
+  );
+
+  it('surfaces a DNS failure for an extended type after fallback', async () => {
+    vi.useFakeTimers();
+    http = upstream({ dns: () => Response.json({ Status: 2 }) });
+    const pending = runToolContract(whoisGetDns, { domain: 'example.com', types: ['TLSA'] });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toMatchObject({
+      error: {
+        data: {
+          reason: 'dns_response_failed',
+          type: 'TLSA',
+          resolver: 'nextdns',
+          status: 2,
+          recovery: { hint: 'Retry the DNS query later or choose another record type.' },
+        },
+      },
+    });
+    expect(textOf(result)).toContain('dns_response_failed');
+    expect(textOf(result)).toContain('Retry the DNS query later or choose another record type.');
+    expect(http.calls.map(({ request }) => new URL(request.url).hostname)).toEqual([
+      'cloudflare-dns.com',
+      'cloudflare-dns.com',
+      'cloudflare-dns.com',
+      'dns.nextdns.io',
+      'dns.nextdns.io',
+      'dns.nextdns.io',
+    ]);
+  });
+});
+
 describe('DNS regression #9 and #10', () => {
   it('rejects explicit empty types at the public boundary before fetch (#9)', async () => {
     http = upstream();

@@ -1,0 +1,22 @@
+{
+  "links": [{ "rel": "self", "href": "https://rdap.db.ripe.net/ip/88.198.10.10" }],
+  "entities": [
+    {
+      "roles": ["registrant"],
+      "vcardArray": ["vcard", [["fn", {}, "text", "HOS-GUN"], ["kind", {}, "text", "individual"]]]
+    },
+    {
+      "roles": ["abuse"],
+      "vcardArray": ["vcard", [["email", { "type": "abuse" }, "text", "abuse@hetzner.com"]]],
+      "entities": [
+        {
+          "roles": ["registrant"],
+          "vcardArray": [
+            "vcard",
+            [["fn", {}, "text", "Hetzner Online GmbH"], ["kind", {}, "text", "org"]]
+          ]
+        }
+      ]
+    }
+  ]
+}
