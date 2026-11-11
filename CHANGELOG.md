@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [0.3.0](changelog/0.3.x/0.3.0.md) — 2026-11-11
+
+Accept internationalized domain names, attribute dossier registration to its exact or parent domain, and expose more DNS and network registration evidence.
+
 ## [0.2.1](changelog/0.2.x/0.2.1.md) — 2026-10-16
 
 DNS and RDAP fidelity with optional routing observations.

@@ -1,6 +1,6 @@
 # whois-mcp-server - Directory Structure
 
-Generated on: 2026-11-11 09:03:17
+Generated on: 2026-11-11 09:18:35
 
 ```text
 whois-mcp-server/
@@ -26,6 +26,7 @@ whois-mcp-server/
 ├── changelog/
 │   ├── 0.1.x/
 │   ├── 0.2.x/
+│   ├── 0.3.x/
 │   └── template.md
 ├── docs/
 │   ├── design.md
