@@ -29,11 +29,11 @@ describe('routing HTTP exchange', () => {
     'bounds stalled %s under one 3000 ms deadline',
     async (stage) => {
       vi.useFakeTimers();
-      const started = Promise.withResolvers<void>();
+      const started = Promise.withResolvers<AbortSignal>();
       let body: ReadableStreamDefaultController<Uint8Array> | undefined;
       http = upstream({
-        routing: () => {
-          started.resolve();
+        routing: (request) => {
+          started.resolve(request.signal);
           if (stage === 'headers') return new Promise<Response>(() => {});
           return new Response(
             new ReadableStream<Uint8Array>({
@@ -46,7 +46,7 @@ describe('routing HTTP exchange', () => {
         },
       });
       const pending = new RoutingService().lookup('8.8.8.8', createMockContext());
-      await started.promise;
+      const requestSignal = await started.promise;
       await vi.advanceTimersByTimeAsync(2999);
       let settled = false;
       void pending.then(() => {
@@ -60,7 +60,8 @@ describe('routing HTTP exchange', () => {
         source_error: expect.stringMatching(/deadline|timeout/i),
       });
       expect(http.calls).toHaveLength(1);
-      expect(http.calls[0]!.request.signal.aborted).toBe(true);
+      // The recorded clone's abort controller can be collected in Node.
+      expect(requestSignal.aborted).toBe(true);
       body?.close();
     },
   );
